@@ -1,5 +1,5 @@
 use super::{cmd::*, *};
-use crate::runtime::modelviews::ClockedModelStateView;
+use crate::runtime::model_views::ClockedModelStateView;
 use crate::{
     action::{Action, WorkingAction},
     runtime::{State::Zero, cmd::DebounceAction::Cancel},

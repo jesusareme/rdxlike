@@ -1,12 +1,13 @@
 mod cmd;
 mod middlewares;
-mod modelviews;
+mod model_views;
 mod reducers;
 mod services;
 mod subscribers;
 mod threadpool;
 
-use crate::{action::{Action::Init, *}, runtime::cmd::{DebounceAction, DebounceCmd, Subscription::Debounce}, util::{MessageSender, MessageSend, VersionedArc}, MoniError, MoniDomainError};
+use crate::util::{ClockSource, ExpenseId};
+use crate::{MoniDomainError, MoniError, action::{Action::Init, *}, runtime::cmd::{DebounceAction, DebounceCmd, Subscription::Debounce}, util::{MessageSend, MessageSender, VersionedArc}};
 use Cmd::*;
 use DebounceAction::{Bump, Cancel};
 use DebounceCmd::DelayedSave;
@@ -16,21 +17,19 @@ use cmd::{Cmd, Subscription::Time};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
 use middlewares::{Middleware, MiddlewareConfig};
-use modelviews::ClockedModelStateView;
+use model_views::ClockedModelStateView;
 use serde::{Deserialize, Serialize};
 use services::{Service, Services};
+
+use std::collections::HashMap;
+use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 use std::{
     collections::VecDeque,
     sync::mpsc::Receiver,
 };
-#[cfg(test)]
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::{Add, AddAssign};
 use subscribers::Subscriber;
 use tracing::{debug, error, info};
-use crate::util::{ClockSource, ExpenseId};
 pub use services::PersistenceError;
 use crate::action::LibAction::StatisticsSubscription;
 use crate::action::Message;
@@ -38,6 +37,8 @@ use crate::inout::{PlainListItem, ViewToken};
 use crate::runtime::subscribers::statistics_subscriber;
 #[cfg(test)]
 use crate::testing::ref_id;
+#[cfg(test)]
+use std::cmp::Ordering;
 
 const MODEL_VERSION: u16 = 1;
 
