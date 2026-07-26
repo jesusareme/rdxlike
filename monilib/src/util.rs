@@ -1,0 +1,213 @@
+use crate::action::Message;
+use jiff::{Timestamp, Zoned};
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
+use std::{
+    ops::{Deref},
+    sync::{
+        Arc, RwLock,
+        mpsc::{SendError, Sender},
+    },
+};
+use std::fmt::{Debug, Display, Formatter};
+use uuid::Uuid;
+
+pub trait MessageSend: Clone + Send + 'static {
+    fn send_message(&self, message: impl Into<Message>) -> Result<(), SendError<Message>>;
+}
+
+#[derive(Clone)]
+pub struct MessageSender {
+    tx: Sender<Message>,
+}
+
+impl MessageSender {
+    pub fn new(tx: Sender<Message>) -> Self {
+        MessageSender { tx }
+    }
+}
+
+impl MessageSend for MessageSender {
+    fn send_message(&self, message: impl Into<Message>) -> Result<(), SendError<Message>> {
+        self.tx.send(message.into())
+    }
+}
+
+pub trait ClockSource {
+    fn now_civil(&self) -> Zoned;
+    fn now_instant(&self) -> Instant;
+}
+
+pub struct SystemClockSource;
+
+impl ClockSource for SystemClockSource {
+    fn now_civil(&self) -> Zoned {
+        Zoned::now()
+    }
+    fn now_instant(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct ExpenseId(Uuid);
+
+impl From<Uuid> for ExpenseId {
+    fn from(value: Uuid) -> Self {
+        ExpenseId(value)
+    }
+}
+
+impl From<ExpenseId> for Uuid {
+    fn from(value: ExpenseId) -> Self {
+        value.0
+    }
+}
+
+impl Display for ExpenseId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+#[cfg(test)]
+impl ExpenseId {
+    pub fn uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+pub trait IdSource {
+    fn new_expense_id(&self, at: Timestamp) -> ExpenseId;
+}
+
+pub struct RandomIdSource;
+
+impl IdSource for RandomIdSource {
+    fn new_expense_id(&self, at: Timestamp) -> ExpenseId {
+        let ts = uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            at.as_second() as u64,
+            at.subsec_nanosecond() as u32,
+        );
+        ExpenseId(Uuid::new_v7(ts))
+    }
+}
+
+#[derive(Debug)]
+pub struct DropCancellation(Arc<RwLock<bool>>, Uuid);
+
+impl DropCancellation {
+    pub fn new(uuid: Uuid) -> Self {
+        DropCancellation(Arc::new(RwLock::new(false)), uuid)
+    }
+    pub fn cancellation_handle(&self) -> CancellationCheck {
+        CancellationCheck(self.0.clone(), self.1)
+    }
+}
+
+pub struct CancellationCheck(Arc<RwLock<bool>>, Uuid);
+impl CancellationCheck {
+    pub fn is_cancelled(&self) -> bool {
+        *self.0.read().unwrap()
+    }
+    pub fn id(&self) -> Uuid {
+        self.1
+    }
+}
+
+impl Clone for CancellationCheck {
+    fn clone(&self) -> Self {
+        CancellationCheck(self.0.clone(), self.1)
+    }
+}
+
+impl PartialEq for DropCancellation {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1
+    }
+}
+
+impl Drop for DropCancellation {
+    fn drop(&mut self) {
+        *self.0.write().unwrap() = true;
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VersionedArc<T> {
+    content: Arc<T>,
+    version: u64,
+}
+
+impl<T> VersionedArc<T>
+where
+    T: Clone,
+{
+    pub fn update_with<R>(&mut self, update: impl FnOnce(&mut T) -> R) -> R {
+        self.version = self.version.wrapping_add(1);
+        update(Arc::make_mut(&mut self.content))
+    }
+}
+
+impl<T> Deref for VersionedArc<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl<T> PartialEq for VersionedArc<T>
+where
+    T: PartialEq,
+{
+    /// Two `Versioned<T>` values are partially equal if the contained `T` values are partially equal.
+    /// So, two versioned values are considered equal irrespective of the version they are on.
+    fn eq(&self, other: &Self) -> bool {
+        self.content.eq(&other.content)
+    }
+}
+
+impl<T> VersionedArc<T> {
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+}
+
+impl<T> From<T> for VersionedArc<T> {
+    fn from(value: T) -> Self {
+        VersionedArc {
+            content: Arc::new(value),
+            version: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_versioned {
+    use super::VersionedArc;
+    use std::ops::Deref;
+
+    #[test]
+    fn versioned_inc_version_mut_ref() {
+        let mut versioned = VersionedArc::from(42);
+        versioned.update_with(|value| *value += 1);
+        assert_eq!(versioned.version, 1);
+        versioned.update_with(|value| *value -= 2);
+        versioned.update_with(|_value| {});
+        assert_eq!(versioned.version, 3);
+        assert_eq!(versioned.version(), 3);
+        assert_eq!(*versioned, 41);
+    }
+
+    #[test]
+    fn versioned_no_inc_version_ref() {
+        let versioned = VersionedArc::from(42);
+        let value1 = *versioned;
+        let value2 = versioned.deref();
+        assert_eq!(versioned.version, 0);
+        assert_eq!(versioned.version(), 0);
+        assert_eq!((value1, *value2), (42, 42));
+    }
+}
