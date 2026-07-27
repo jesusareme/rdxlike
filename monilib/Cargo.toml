@@ -11,10 +11,10 @@ boltffi = "0.28.0"
 uuid = {  version = "1", features = ["serde", "v4", "v7"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
-tracing = "0"
+tracing = "0.1"
 tracing-subscriber = { version = "*", features = ["env-filter"] }
 jiff = { version = "0.2.31", features = ["serde", "std"] }
-enumset = "1.1.13"
+enumset = "1.1"
 rand = "0.10.1"
 itertools = "0.15.0"
 log = "0.4.29"
