@@ -93,7 +93,7 @@ type RuntimeReducer<Action, State, Flag> = fn(Action) -> RuntimeProducts<State, 
 
 pub struct Runtime<RuntimeAction, CM: ChainableMiddleware, JD: JobsDispatcher = ThreadPool>
 {
-    services: <<CM as ChainableMiddleware>::ServiceCmd as SCmd>::Environment,
+    services: <CM::ServiceCmd as SCmd>::Environment,
     state: CM::State,
     middlewares: MiddlewareStore<CM>,
     subscribers: Vec<Box<dyn Subscriber<Flag = CM::Flag, State = CM::State>>>,
