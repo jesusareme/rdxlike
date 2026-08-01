@@ -1,24 +1,25 @@
-mod cmd;
-mod messages;
+pub mod cmd;
+pub mod messages;
 pub mod middleware;
-mod subscribers;
-mod threadpool;
-mod util;
+pub mod subscribers;
+pub mod threadpool;
+pub mod util;
 
 use crate::cmd::{Cmd, SCmd};
 use crate::messages::Message;
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::threadpool::{JobsDispatcher, ThreadPool};
-use enumset::EnumSet;
+use enumset::{EnumSet, EnumSetType};
 use std::collections::VecDeque;
 use std::ops::{Add, AddAssign};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::Receiver;
 use subscribers::Subscriber;
 use tracing::{error, info};
 use util::MessageSender;
 
-pub struct RuntimeProducts<State, Flag> {
+pub struct RuntimeProducts<State, Flag, Action> {
     pub subscriber: Option<Box<dyn Subscriber<Flag = Flag, State = State>>>,
+    pub actions: Vec<Action>,
 }
 
 pub struct ActionProducts<CM>
@@ -85,21 +86,32 @@ impl<CM: ChainableMiddleware> AddAssign<ActionProducts<CM>> for ActionProducts<C
     }
 }
 
-type Reducer<CM> = fn(
+pub type Reducer<CM> = fn(
     &mut <CM as ChainableMiddleware>::State,
     <CM as ChainableMiddleware>::Action,
 ) -> ActionProducts<CM>;
-type RuntimeReducer<Action, State, Flag> = fn(Action) -> RuntimeProducts<State, Flag>;
+pub type RuntimeReducer<RuntimeAction, Action, State, Flag> =
+    fn(RuntimeAction) -> RuntimeProducts<State, Flag, Action>;
 
-pub struct Runtime<RuntimeAction, CM: ChainableMiddleware, JD: JobsDispatcher = ThreadPool>
-{
+pub struct RuntimeConfig<RuntimeAction, CM: ChainableMiddleware, JD: JobsDispatcher = ThreadPool> {
+    pub services: <CM::ServiceCmd as SCmd>::Environment,
+    pub state: CM::State,
+    pub middlewares: Vec<CM>,
+    pub reducer: Reducer<CM>,
+    pub runtime_reducer: RuntimeReducer<RuntimeAction, CM::Action, CM::State, CM::Flag>,
+    pub jobs_dispatcher: JD,
+    pub messages_rx: Receiver<Message<CM::Action, RuntimeAction>>,
+    pub messages_tx: MessageSender<CM::Action, RuntimeAction>,
+}
+
+pub struct Runtime<RuntimeAction, CM: ChainableMiddleware, JD: JobsDispatcher = ThreadPool> {
     services: <CM::ServiceCmd as SCmd>::Environment,
     state: CM::State,
     middlewares: MiddlewareStore<CM>,
     subscribers: Vec<Box<dyn Subscriber<Flag = CM::Flag, State = CM::State>>>,
     messages_rx: Receiver<Message<CM::Action, RuntimeAction>>,
     messages_tx: MessageSender<CM::Action, RuntimeAction>,
-    runtime_reducer: RuntimeReducer<RuntimeAction, CM::State, CM::Flag>,
+    runtime_reducer: RuntimeReducer<RuntimeAction, CM::Action, CM::State, CM::Flag>,
     jobs_dispatcher: JD,
 }
 
@@ -110,30 +122,28 @@ where
     JD: JobsDispatcher,
     Message<CM::Action, RuntimeAction>: From<CM::Action>,
 {
-    pub fn new(
-        services: <<CM as ChainableMiddleware>::ServiceCmd as SCmd>::Environment,
-        state: CM::State,
-        middlewares_chain: Vec<CM>,
-        reducer: Reducer<CM>,
-        runtime_reducer: RuntimeReducer<RuntimeAction, CM::State, CM::Flag>,
-        jobs_dispatcher: JD,
-    ) -> Self {
-        let (tx, messages_rx) = channel();
+    pub fn new(config: RuntimeConfig<RuntimeAction, CM, JD>) -> Self {
+        let RuntimeConfig {
+            services,
+            state,
+            middlewares,
+            reducer,
+            runtime_reducer,
+            jobs_dispatcher,
+            messages_rx,
+            messages_tx,
+        } = config;
 
         Runtime {
             services,
             state,
-            middlewares: MiddlewareStore::new(middlewares_chain, reducer),
+            middlewares: MiddlewareStore::new(middlewares, reducer),
             subscribers: vec![],
             messages_rx,
-            messages_tx: MessageSender::new(tx),
+            messages_tx,
             runtime_reducer,
             jobs_dispatcher,
         }
-    }
-
-    pub fn sender(&self) -> MessageSender<CM::Action, RuntimeAction> {
-        self.messages_tx.clone()
     }
 
     pub fn run(mut self) {
@@ -158,6 +168,7 @@ where
                     if let Some(subscriber) = products.subscriber {
                         self.subscribers.push(subscriber);
                     }
+                    pending.extend(products.actions.into_iter().map(Into::into));
                 }
 
                 Message::Action(action) => {
@@ -165,59 +176,72 @@ where
                     dirty |= effects.dirty;
 
                     for cmd in effects.cmds {
-                        self.process_command(cmd, &mut pending);
+                        process_command(
+                            cmd,
+                            &mut self.services,
+                            &self.jobs_dispatcher,
+                            &self.messages_tx,
+                            &mut pending,
+                        );
                     }
                 }
             }
         }
 
-        self.notify_subscribers(dirty);
+        notify_subscribers(&self.state, &mut self.subscribers, dirty);
     }
+}
 
-    fn notify_subscribers(&mut self, dirty: EnumSet<CM::Flag>) {
-        let state = &self.state;
+fn notify_subscribers<State, Flag: EnumSetType>(
+    state: &State,
+    subscribers: &mut Vec<Box<dyn Subscriber<Flag = Flag, State = State>>>,
+    dirty: EnumSet<Flag>,
+) {
+    subscribers.retain(|s| s.is_active());
+    subscribers
+        .iter_mut()
+        .filter(|s| s.interested_in(&dirty))
+        .filter_map(|s| s.notify(state).err())
+        .for_each(|e| error!("Subscriber error: {e}"));
+}
 
-        self.subscribers.retain(|s| s.is_active());
-        self.subscribers
-            .iter_mut()
-            .filter(|s| s.interested_in(&dirty))
-            .filter_map(|s| s.notify(state).err())
-            .for_each(|e| error!("Subscriber error: {e}"));
-    }
+fn process_command<Action, ServiceCmd, JD, RuntimeAction>(
+    cmd: Cmd<Action, ServiceCmd>,
+    services: &mut ServiceCmd::Environment,
+    jobs_dispatcher: &JD,
+    messages_tx: &MessageSender<Action, RuntimeAction>,
+    pending: &mut VecDeque<Message<Action, RuntimeAction>>,
+) where
+    Action: Send + 'static,
+    RuntimeAction: Send + 'static,
+    ServiceCmd: SCmd,
+    JD: JobsDispatcher,
+    Message<Action, RuntimeAction>: From<Action>,
+{
+    use Cmd::*;
+    match cmd {
+        Direct(new_work_actions) => {
+            pending.extend(new_work_actions.into_iter().map(Into::into));
+        }
 
-    fn process_command(
-        &mut self,
-        cmd: Cmd<CM::Action, CM::ServiceCmd>,
-        pending: &mut VecDeque<Message<CM::Action, RuntimeAction>>,
-    ) {
-        use Cmd::*;
-        match cmd {
-            Direct(new_work_actions) => {
-                pending
-                    .extend(new_work_actions
-                    .into_iter()
-                    .map(Into::into));
-            }
-
-            Queue(new_work_actions) => {
-                new_work_actions.into_iter().for_each(|a| {
-                    _ = self.messages_tx.send_message(a).inspect_err(|e| {
-                        error!("Error while sending new actions from Queue command: {e:?}");
-                    });
+        Queue(new_work_actions) => {
+            new_work_actions.into_iter().for_each(|a| {
+                _ = messages_tx.send_message(a).inspect_err(|e| {
+                    error!("Error while sending new actions from Queue command: {e:?}");
                 });
-            }
+            });
+        }
 
-            Async(job) => {
-                let messages_tx = self.messages_tx.clone();
-                self.jobs_dispatcher.work_on(Box::new(move || {
-                    let action = job();
-                    messages_tx.send_message(action).unwrap(); //todo! control errors
-                }));
-            }
+        Async(job) => {
+            let messages_tx = messages_tx.clone();
+            jobs_dispatcher.work_on(Box::new(move || {
+                let action = job();
+                messages_tx.send_message(action).unwrap(); //todo! control errors
+            }));
+        }
 
-            Env(job) => {
-                job.process(&mut self.services);
-            }
+        Env(job) => {
+            job.process(services);
         }
     }
 }

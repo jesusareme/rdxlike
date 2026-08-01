@@ -71,19 +71,3 @@ impl<CM: ChainableMiddleware> MiddlewareStore<CM> {
         MiddlewareStore { funs, reducer }
     }
 }
-
-impl<'n, CM: ChainableMiddleware> Next<'n, CM> {
-    fn run(&mut self, state: &mut CM::State, action: CM::Action) -> ActionProducts<CM> {
-        match self.remaining.split_first_mut() {
-            None => (self.reducer)(state, action),
-            Some((current, rest)) => current.execute(
-                state,
-                action,
-                Next {
-                    remaining: rest,
-                    reducer: self.reducer,
-                },
-            ),
-        }
-    }
-}
