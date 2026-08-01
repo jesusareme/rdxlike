@@ -21,12 +21,3 @@ impl<Action, RuntimeAction> Clone for MessageSender<Action, RuntimeAction> {
 		MessageSender { tx: self.tx.clone() }
 	}
 }
-
-
-// impl MessageSend for MessageSender {
-// 	type Message = ();
-// 
-// 	fn send_message(&self, message: impl Into<Self::Message>) -> Result<(), SendError<Self::Message>> {
-// 		self.tx.send(message.into())
-// 	}
-// }
