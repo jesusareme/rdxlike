@@ -16,7 +16,7 @@ use boltffi::data;
 use cmd::{Cmd, Subscription::Time};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
-use middlewares::{Middleware, MiddlewareConfig};
+use middlewares::{MiddlewareStore, MiddlewareConfig};
 use model_views::ClockedModelStateView;
 use serde::{Deserialize, Serialize};
 use services::{Service, Services};
@@ -125,7 +125,7 @@ pub struct RuntimeConfig {
 
 pub struct Runtime {
     environment: Services,
-    middleware: Middleware,
+    middleware: MiddlewareStore,
     state: State,
     messages_rx: Receiver<Message>,
     actions_tx: MessageSender,
@@ -138,7 +138,7 @@ impl Runtime {
             logging_middleware: config.logging_enabled,
             clock_source: config.clock,
         };
-        let middleware = Middleware::new(m_config, reducers::reducer);
+        let middleware = MiddlewareStore::new(m_config, reducers::reducer);
 
         let state = State::Zero(vec![]);
 

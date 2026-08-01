@@ -11,12 +11,12 @@ pub struct MiddlewareConfig {
 
 type Reducer = fn(&mut State, Action) -> Products;
 
-pub struct Middleware {
+pub struct MiddlewareStore {
     funs: Vec<ChainableMiddleware>,
     reducer: Reducer,
 }
 
-impl Middleware {
+impl MiddlewareStore {
     pub fn run(&mut self, state: &mut State, action: Action) -> Products {
         Next {
             remaining: &mut self.funs,
@@ -32,7 +32,7 @@ impl Middleware {
         }
         funs.push(ChainableMiddleware::Clock(config.clock_source));
         funs.push(ChainableMiddleware::Cleaner);
-        Middleware { funs, reducer }
+        MiddlewareStore { funs, reducer }
     }
 }
 
