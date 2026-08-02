@@ -1,49 +1,30 @@
-use crate::cmd::SCmd;
-use crate::{ActionProducts, Reducer};
-use enumset::EnumSetType;
+use crate::{ActionProducts, Client, Reducer};
 
-pub trait ChainableMiddleware: Sized {
-    type State;
-    type Action: Send + 'static;
-    type Flag: EnumSetType;
-    type ServiceCmd: SCmd;
-
+pub trait ChainableMiddleware<C: Client> {
     fn execute(
         &mut self,
-        state: &mut Self::State,
-        action: Self::Action,
-        next: impl NextChainable,
-    ) -> ActionProducts<Self>;
+        state: &mut C::State,
+        action: C::Action,
+        next: Next<C>,
+    ) -> ActionProducts<C>;
 }
 
-pub trait NextChainable {
-    type CM: ChainableMiddleware;
+pub struct MiddlewareStore<C: Client> {
+    funs: Vec<Box<dyn ChainableMiddleware<C>>>,
+    reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
+}
 
+pub struct Next<'n, C: Client> {
+    remaining:  &'n mut [Box<dyn ChainableMiddleware<C>>],
+    reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
+}
+
+impl<'n, C: Client> Next<'n, C> {
     fn run(
         &mut self,
-        state: &mut <Self::CM as ChainableMiddleware>::State,
-        action: <Self::CM as ChainableMiddleware>::Action,
-    ) -> ActionProducts<Self::CM>;
-}
-
-pub struct MiddlewareStore<CM: ChainableMiddleware> {
-    funs: Vec<CM>,
-    reducer: fn(&mut CM::State, CM::Action) -> ActionProducts<CM>,
-}
-
-struct Next<'n, CM: ChainableMiddleware> {
-    remaining: &'n mut [CM],
-    reducer: fn(&mut CM::State, CM::Action) -> ActionProducts<CM>,
-}
-
-impl<'n, CM: ChainableMiddleware> NextChainable for Next<'n, CM> {
-    type CM = CM;
-
-    fn run(
-        &mut self,
-        state: &mut <Self::CM as ChainableMiddleware>::State,
-        action: <Self::CM as ChainableMiddleware>::Action,
-    ) -> ActionProducts<Self::CM> {
+        state: &mut C::State,
+        action: C::Action,
+    ) -> ActionProducts<C> {
         match self.remaining.split_first_mut() {
             None => (self.reducer)(state, action),
             Some((current, rest)) => current.execute(
@@ -58,8 +39,8 @@ impl<'n, CM: ChainableMiddleware> NextChainable for Next<'n, CM> {
     }
 }
 
-impl<CM: ChainableMiddleware> MiddlewareStore<CM> {
-    pub fn run(&mut self, state: &mut CM::State, action: CM::Action) -> ActionProducts<CM> {
+impl<C: Client> MiddlewareStore<C> {
+    pub fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
         Next {
             remaining: &mut self.funs,
             reducer: self.reducer,
@@ -67,7 +48,7 @@ impl<CM: ChainableMiddleware> MiddlewareStore<CM> {
         .run(state, action)
     }
 
-    pub fn new(funs: Vec<CM>, reducer: Reducer<CM>) -> Self {
+    pub fn new(funs: Vec<Box<dyn ChainableMiddleware<C>>>, reducer: Reducer<C>) -> Self {
         MiddlewareStore { funs, reducer }
     }
 }
