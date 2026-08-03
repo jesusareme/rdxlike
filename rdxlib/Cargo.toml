@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 tracing = "0.1"
 enumset = "1.1"
+uuid = "1.24"
