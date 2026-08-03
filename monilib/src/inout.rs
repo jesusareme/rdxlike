@@ -50,7 +50,6 @@ pub struct MoniStatistics {
     pub max: Option<i64>,
 }
 
-#[data]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewToken { id: Uuid }
 impl From<Uuid> for ViewToken {
