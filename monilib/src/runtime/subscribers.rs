@@ -62,7 +62,7 @@ pub trait ViewTransformer: Send + 'static {
     /// model. A new derived state to feed a view will be generated if the comparison is
     /// favorable (previous value returned from this function is different from the one before).
     /// First execution of a `ViewTransformer` will always generate a new state derivation as
-    /// long as this functions doesn't return a ``ComparableResult::NothingToCompare` result.
+    /// long as this functions doesn't return a `ComparableResult::NothingToCompare` result.
     fn comparable(state: &State, token: ViewToken) -> ComparableResult<Self::ComparableValue>;
 
     /// Extracts the minimum thread-safe slice from the original state needed to calculate the
