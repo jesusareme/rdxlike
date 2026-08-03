@@ -24,6 +24,7 @@ impl Display for SubscriberError {
 		}
 	}
 }
+impl Error for SubscriberError {}
 
 pub trait Subscriber {
 	type State;
@@ -88,9 +89,8 @@ pub trait ViewOutput<V: Send + 'static>: Clone + Send + 'static {
 	fn is_active(&self) -> bool;
 }
 
-impl Error for SubscriberError {}
 #[allow(unused)]
-struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> {
+pub struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> {
 	id: ViewId,
 	last: Option<VT::ComparableValue>,
 	sender: Sender<Option<VT::Slice>>,
@@ -98,7 +98,6 @@ struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Pr
 }
 
 impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubscriber<C, VT, VO> {
-	#[allow(unused)]
 	pub fn new(id: ViewId, transformer: VT, output: VO) -> Self {
 		let (sender, receiver) = mpsc::channel::<Option<VT::Slice>>();
 		let builder = thread::Builder::new().name(id.to_string());

@@ -20,7 +20,7 @@ pub struct Next<'n, C: Client> {
 }
 
 impl<'n, C: Client> Next<'n, C> {
-    fn run(
+    pub fn run(
         &mut self,
         state: &mut C::State,
         action: C::Action,

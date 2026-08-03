@@ -5,12 +5,28 @@ use crate::cmd::Cmd;
 use crate::subscribers::Subscriber;
 
 pub struct RuntimeProducts<C: Client> {
-	pub subscriber: Option<Box<dyn Subscriber<Flag= C::Flag, State= C::State>>>,
+	pub subscriber: Option<Box<dyn Subscriber<Flag = C::Flag, State = C::State>>>,
 	pub actions: Vec<C::Action>,
 }
 
+impl<C: Client> RuntimeProducts<C> {
+	pub fn subscriber(subscriber: impl Subscriber<Flag = C::Flag, State = C::State> + 'static) -> Self {
+		RuntimeProducts {
+			subscriber: Some(Box::new(subscriber)),
+			actions: vec![],
+		}
+	}
+
+	pub fn none() -> Self {
+		RuntimeProducts {
+			subscriber: None,
+			actions: vec![],
+		}
+	}
+}
+
 pub struct ActionProducts<C: Client> {
-	pub cmds: Vec<Cmd<C::Action, C::ServiceCommand>>,
+	pub cmds: Vec<Cmd<C>>,
 	pub dirty: EnumSet<C::Flag>,
 }
 
@@ -22,21 +38,21 @@ impl<C: Client> ActionProducts<C> {
 		}
 	}
 
-	pub fn cmd(cmd: impl Into<Cmd<C::Action, C::ServiceCommand>>) -> Self {
+	pub fn cmd(cmd: impl Into<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds: vec![cmd.into()],
 			dirty: EnumSet::empty(),
 		}
 	}
 
-	pub fn cmds(cmds: Vec<Cmd<C::Action, C::ServiceCommand>>) -> Self {
+	pub fn cmds(cmds: Vec<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds,
 			dirty: EnumSet::empty(),
 		}
 	}
 
-	pub fn with_cmd(mut self, cmd: impl Into<Cmd<C::Action, C::ServiceCommand>>) -> Self {
+	pub fn with_cmd(mut self, cmd: impl Into<Cmd<C>>) -> Self {
 		self.cmds.push(cmd.into());
 		self
 	}

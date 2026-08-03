@@ -6,7 +6,7 @@ pub mod threadpool;
 pub mod util;
 pub mod products;
 
-use crate::cmd::{Cmd, SCmd};
+use crate::cmd::{Cmd, EnvironmentCommand};
 use crate::messages::Message;
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::products::{ActionProducts, RuntimeProducts};
@@ -17,14 +17,14 @@ use std::sync::mpsc::Receiver;
 use subscribers::Subscriber;
 use tracing::{error, info};
 use util::MessageSender;
+use crate::util::MessageSend;
 
 pub trait Client {
     type State;
     type Action: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
     type RuntimeAction: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
     type Flag: enumset::EnumSetType;
-    type ServiceCommand: SCmd;
-    type Environment;
+    type ServiceCommand: EnvironmentCommand;
 }
 
 pub type Reducer<C> = fn(&mut <C as Client>::State, <C as Client>::Action) -> ActionProducts<C>;
@@ -32,23 +32,23 @@ pub type Reducer<C> = fn(&mut <C as Client>::State, <C as Client>::Action) -> Ac
 pub type RuntimeReducer<C> = fn(<C as Client>::RuntimeAction) -> RuntimeProducts<C>;
 
 pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
-    pub services: <C::ServiceCommand as SCmd>::Environment,
+    pub services: <C::ServiceCommand as EnvironmentCommand>::Environment,
     pub state: C::State,
     pub middlewares: Vec<Box<dyn ChainableMiddleware<C>>>,
     pub reducer: Reducer<C>,
     pub runtime_reducer: RuntimeReducer<C>,
     pub jobs_dispatcher: JD,
     pub messages_rx: Receiver<Message<C::Action, C::RuntimeAction>>,
-    pub messages_tx: MessageSender<C::Action, C::RuntimeAction>,
+    pub messages_tx: MessageSender<Message<C::Action, C::RuntimeAction>>,
 }
 
 pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
-    services: <C::ServiceCommand as SCmd>::Environment,
+    services: <C::ServiceCommand as EnvironmentCommand>::Environment,
     state: C::State,
     middlewares: MiddlewareStore<C>,
     subscribers: Vec<Box<dyn Subscriber<Flag = C::Flag, State = C::State>>>,
     messages_rx: Receiver<Message<C::Action, C::RuntimeAction>>,
-    messages_tx: MessageSender<C::Action, C::RuntimeAction>,
+    messages_tx: MessageSender<Message<C::Action, C::RuntimeAction>>,
     runtime_reducer: RuntimeReducer<C>,
     jobs_dispatcher: JD,
 }
@@ -126,10 +126,10 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
     }
 
     fn process_command(
-        cmd: Cmd<C::Action, C::ServiceCommand>,
-        services: &mut <C::ServiceCommand as SCmd>::Environment,
+        cmd: Cmd<C>,
+        services: &mut <C::ServiceCommand as EnvironmentCommand>::Environment,
         jobs_dispatcher: &JD,
-        messages_tx: &MessageSender<C::Action, C::RuntimeAction>,
+        messages_tx: &MessageSender<Message<C::Action, C::RuntimeAction>>,
         pending: &mut VecDeque<Message<C::Action, C::RuntimeAction>>,
     ) {
         use Cmd::*;
@@ -146,10 +146,10 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
                 });
             }
 
-            Async(job) => {
+            Async(task) => {
                 let messages_tx = messages_tx.clone();
                 jobs_dispatcher.work_on(Box::new(move || {
-                    let action = job();
+                    let action = (task.job)();
                     messages_tx.send_message(action).unwrap(); //todo! control errors
                 }));
             }
