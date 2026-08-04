@@ -1,23 +1,23 @@
 pub mod cmd;
 pub mod messages;
 pub mod middleware;
+pub mod products;
 pub mod subscribers;
 pub mod threadpool;
 pub mod util;
-pub mod products;
 
 use crate::cmd::{Cmd, EnvironmentCommand};
 use crate::messages::Message;
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::products::{ActionProducts, RuntimeProducts};
 use crate::threadpool::{JobsDispatcher, ThreadPool};
+use crate::util::MessageSend;
 use enumset::EnumSet;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use subscribers::Subscriber;
 use tracing::{error, info};
 use util::MessageSender;
-use crate::util::MessageSend;
 
 pub trait Client {
     type State;

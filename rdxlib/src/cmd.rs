@@ -14,10 +14,19 @@ pub struct AsyncTask<A> {
 
 impl<A> Debug for AsyncTask<A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AsyncTask, name='{}", self.name)
+        f.debug_struct("AsyncTask")
+            .field("name", &self.name)
+            .finish()
     }
 }
 
+impl<A> PartialEq for AsyncTask<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name.eq(&other.name)
+    }
+}
+
+#[derive(PartialEq)]
 pub enum Cmd<C: Client>
 {
     Direct(Vec<C::Action>),
