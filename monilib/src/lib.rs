@@ -7,10 +7,15 @@ mod util;
 #[cfg(test)]
 mod testing;
 
+use crate::inout::MoniStatistics;
+use crate::runtime::{MoniMessage, RuntimeEnvironment};
+use crate::util::ExpenseId;
 use action::*;
 use boltffi::{EventSubscription, data, error, export, ffi_stream};
 use log::warn;
-use runtime::{Runtime, RuntimeConfig};
+use rdxlib::messages::Message;
+use rdxlib::subscribers::ViewId;
+use rdxlib::util::{MessageSend, MessageSender};
 use std::error::Error;
 use std::{
     fmt::{Display, Formatter},
@@ -22,16 +27,15 @@ use std::{
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use util::{ClockSource, MessageSend, MessageSender, RandomIdSource, SystemClockSource};
+use util::{ClockSource, RandomIdSource, SystemClockSource};
 use uuid::Uuid;
 
-use crate::util::ExpenseId;
 pub use crate::inout::{
     LibOutput, MoniExpense, MoniExpenseUpdate, MoniExpensePlainListSnapshot, MoniValidationError,
     MoniValidationErrorCause, PlainListItem,
 };
 pub use crate::runtime::ExpenseCategory;
-use crate::inout::{MoniStatistics, ViewToken};
+
 
 #[data]
 #[derive(Clone, Debug)]
@@ -151,8 +155,8 @@ impl Display for MoniError {
 }
 
 pub struct PlainListViewHandler {
-    token: ViewToken,
-    action_sender: MessageSender,
+    token: ViewId,
+    action_sender: MessageSender<Message<Action, LibAction>>,
 }
 
 #[export]
@@ -177,7 +181,7 @@ impl PlainListViewHandler {
 }
 
 pub struct MoniLib {
-    action_sender: MessageSender,
+    action_sender: MessageSender<MoniMessage>,
     clock: Arc<dyn ClockSource + Send + Sync>,
     ids: RandomIdSource,
 }
@@ -196,7 +200,7 @@ impl MoniLib {
         inout::try_state_path(&path)?;
 
 
-        let (root_message_tx, message_rx) = mpsc::channel::<Message>();
+        let (root_message_tx, message_rx) = mpsc::channel::<MoniMessage>();
         let dispatcher = MessageSender::new(root_message_tx);
         let actions_tx = dispatcher.clone();
 
@@ -208,14 +212,15 @@ impl MoniLib {
         let builder = Builder::new().name("messages".to_string());
         let _actions_handler = builder
             .spawn(move || {
-                let config = RuntimeConfig {
+                let config = RuntimeEnvironment {
                     messages_rx: message_rx,
                     actions_tx,
                     logging_enabled: true,
                     path,
                     clock: clock_thread,
                 };
-                Runtime::new(config).run();
+                let runtime = runtime::new(config);
+                runtime.run();
             })
             .unwrap();
 

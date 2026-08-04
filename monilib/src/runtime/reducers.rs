@@ -5,12 +5,13 @@ use crate::{
     runtime::{State::Zero, cmd::DebounceAction::Cancel},
 };
 use std::mem;
+use rdxlib::cmd::Cmd::Direct;
 use crate::runtime::Dirty::Statistics;
 
-pub fn reducer(state: &mut State, action: Action) -> Products {
+pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
     use Action::*;
     match action {
-        Init => Products::cmd(PersistenceCmd::CreateOrOpenFile),
+        Init => MoniProducts::cmd(PersistenceCmd::CreateOrOpenFile),
 
         InitResult(result) => {
             let model = match result {
@@ -28,47 +29,50 @@ pub fn reducer(state: &mut State, action: Action) -> Products {
             });
 
             match mem::replace(state, working) {
-                Zero(pending) => Products::cmd(Direct(pending)),
-                _ => Products::none().with_dirty(EnumSet::all()),
+                Zero(pending) => {
+                    let pending: Vec<Action> = pending.into_iter().map(Into::into).collect();
+                    MoniProducts::cmd(Direct(pending))
+                }
+                _ => MoniProducts::none().with_dirty(EnumSet::all()),
             }
         }
-        NoOp => Products::none(),
+        NoOp => MoniProducts::none(),
 
         Working(action) => match state {
             Zero(pending) => {
                 pending.push(action);
-                Products::none()
+                MoniProducts::none()
             }
             State::Working(working) => reducer_working(working, action),
         },
     }
 }
 
-fn failed_init(error: impl std::fmt::Debug) -> Products {
+fn failed_init(error: impl std::fmt::Debug) -> MoniProducts {
     panic!("MoniLib was unable to initialize\n{:?}", error)
 }
 
-fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> Products {
+fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> MoniProducts {
     use DebounceCmd::*;
     use WorkingAction::*;
     match action {
-        Save => Products::cmds(vec![
+        Save => MoniProducts::cmds(vec![
             PersistenceCmd::Save(state.model.clone()).into(),
             DelayedSave(Cancel).into(),
         ]),
         SuccessfulSave => {
             debug!("Successful SAVE!");
-            Products::none()
+            MoniProducts::none()
         }
 
-        Watchdog => Products::cmd(TimeSubscriptionCmd::Watchdog),
+        Watchdog => MoniProducts::cmd(TimeSubscriptionCmd::Watchdog),
 
         Model(action) => reducer_model(state.model_view(), action),
         Running(action) => reducer_running(&mut state.running, action),
 
         WatchdogWatching => {
             debug!("watchdog watching!");
-            Products::none()
+            MoniProducts::none()
         } // Action::DelayedSave => {
           //
           // }
@@ -101,20 +105,20 @@ fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> Products 
     }
 }
 
-fn reducer_running(state: &mut RunningState, action: RunningAction) -> Products {
+fn reducer_running(state: &mut RunningState, action: RunningAction) -> MoniProducts {
     match action {
         RunningAction::ListViewHint(token, id) => {
             if let Some(view_state) = state.plain_list.get_mut(&token) {
                 view_state.hint = Some(id);
             }
-            Products::none().with_dirty_flag(Dirty::Views)
+            MoniProducts::none().with_dirty(Dirty::Views)
         }
         RunningAction::ListViewPrepare(token) => {
             state
                 .plain_list
                 .insert(token, PlainListViewState { hint: None });
 
-            Products::none().with_dirty_flag(Dirty::Views)
+            MoniProducts::none().with_dirty(Dirty::Views)
         }
     }
 }
@@ -127,7 +131,7 @@ fn finances_dirty(date: &Zoned, first_of_month: &Zoned) -> Dirty {
     }
 }
 
-fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products {
+fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProducts {
     match action {
         ModelAction::Add(expense) => {
             let first_of_month = state
@@ -145,7 +149,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                 expenses.insert(idx, expense);
             });
 
-            Products::none().with_dirty_flag(dirty).with_delayed_save()
+            MoniProducts::none().with_dirty(dirty).with_delayed_save()
         }
         
         ModelAction::Update(updated_expense) => {
@@ -159,7 +163,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                     state
                         .errors
                         .push(MoniDomainError::ExpenseNotFound(updated_expense.id.into()).into());
-                    Products::none()
+                    MoniProducts::none()
                 }
                 Some(idx) => {
                     let previous = state
@@ -169,7 +173,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                         .expect("element should exist");
 
                     if *previous == updated_expense {
-                        return Products::none();
+                        return MoniProducts::none();
                     }
 
                     let first_of_month = state
@@ -193,7 +197,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                             expenses.insert(updated_idx, updated_expense);
                         }
 
-                        Products::none()
+                        MoniProducts::none()
                             .with_dirty(previous_dirty | updated_dirty)
                             .with_delayed_save()
                     })
@@ -212,7 +216,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                     state
                         .errors
                         .push(MoniDomainError::ExpenseNotFound(id.into()).into());
-                    Products::none()
+                    MoniProducts::none()
                 }
                 Some(idx) => {
                     let first_of_month = state
@@ -227,7 +231,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
 
                     let dirty = finances_dirty(&removed.date, &first_of_month);
 
-                    Products::none().with_dirty_flag(dirty).with_delayed_save()
+                    MoniProducts::none().with_dirty(dirty).with_delayed_save()
                 }
             }
         },
@@ -237,9 +241,9 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
                 Some(s) if s.at_movements_version == state.model_state.movements.version()
                 => {
                     s.requested_at = state.time.timestamp();
-                    Products::none().with_dirty_flag(Statistics)
+                    MoniProducts::none().with_dirty(Statistics)
                 },
-                _ => Products::cmd(AsyncCmd::StatisticsCalculation(state.model_state.movements.clone(),
+                _ => MoniProducts::cmd(AsyncCmd::StatisticsCalculation(state.model_state.movements.clone(),
                                                                    state.time.timestamp(),
                 )),
             }
@@ -247,11 +251,11 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> Products 
 
         ModelAction::StatisticsAllResult(statistics) => {
             if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at) {
-                return Products::none()
+                return MoniProducts::none()
             }
 
             state.model_state.statistics_all = Some(statistics);
-            Products::none().with_dirty_flag(Statistics)
+            MoniProducts::none().with_dirty(Statistics)
         }
     }
 }
@@ -261,7 +265,6 @@ mod reducer_model_test {
     use super::*;
     use crate::MoniErrorType;
     use crate::testing::{contemporary_ref_date, ordered_by_index_map};
-    use ExpenseCategory::*;
     use itertools::Itertools;
     use jiff::{Span, ToSpan};
     use proptest::prelude::*;
@@ -270,6 +273,12 @@ mod reducer_model_test {
     use std::str::FromStr;
     use std::time::{SystemTime};
     use uuid::Uuid;
+    use rdxlib::cmd::Cmd::Env;
+    use crate::runtime::cmd::DebounceAction::Bump;
+    use crate::runtime::cmd::DebounceCmd::DelayedSave;
+    use crate::runtime::cmd::ServiceCommand::Subscribe;
+    use crate::runtime::cmd::Subscription::Debounce;
+    use crate::runtime::ExpenseCategory::*;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();
@@ -336,7 +345,7 @@ mod reducer_model_test {
                     Uuid::from_str("01234567-0123-0123-0123-000000000006").unwrap(),
                 ),
                 date: calculate_date(0),
-                category: ExpenseCategory::Essential,
+                category: Essential,
                 ..Expense::default()
             },
         ]
@@ -347,7 +356,7 @@ mod reducer_model_test {
         time: &Zoned,
         errors: &mut Vec<MoniError>,
         action: ModelAction,
-    ) -> Products {
+    ) -> MoniProducts {
         reducer_model(
             ClockedModelStateView {
                 model_state: state,
@@ -396,7 +405,7 @@ mod reducer_model_test {
 
             let mut state = ModelState::default();
             let mut errors = vec![];
-            let mut products = Products::none();
+            let mut products = MoniProducts::none();
             expenses.clone().into_iter().for_each(|e| {
                 products += reduce(
                     &mut state,
@@ -411,11 +420,11 @@ mod reducer_model_test {
             assert_eq!(state.movements.len(), expenses.len());
 
             let saves: Vec<_> = products.cmds.iter().filter(|cmd| {
-                matches!(cmd, Subscribe(Debounce(DelayedSave(Bump))))
+                matches!(cmd, Env(Subscribe(Debounce(DelayedSave(Bump)))))
             }).collect();
             assert_eq!(saves.len(), expenses.len());
 
-            products = Products::none();
+            products = MoniProducts::none();
 
             for (e, d) in expenses.iter_mut().zip(new_dates) {
                 let d = Zoned::try_from(d);
@@ -432,7 +441,7 @@ mod reducer_model_test {
 
             assert_eq!(state.movements.len(), expenses.len());
             let saves: Vec<_> = products.cmds.iter().filter(|cmd| {
-                matches!(cmd, Subscribe(Debounce(DelayedSave(Bump))))
+                matches!(cmd, Env(Subscribe(Debounce(DelayedSave(Bump)))))
             }).collect();
             assert_eq!(saves.len(), expenses.len());
             assert!(errors.is_empty());
@@ -469,18 +478,10 @@ mod reducer_model_test {
             ModelAction::Add(expense.clone()),
         );
 
-        match products.cmds.first().unwrap() {
-            Direct(_) => {}
-            Queue(_) => {}
-            Async(_) => {}
-            Persistence(_) => {}
-            Subscribe(_) => {}
-        }
-
         assert_eq!(products.dirty, dirty);
         assert_eq!(
             products.cmds,
-            vec![Cmd::Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Debounce(DelayedSave(Bump)))]
         );
 
         assert!(errors.is_empty());
@@ -660,7 +661,7 @@ mod reducer_model_test {
         assert_eq!(products.dirty, EnumSet::only(Dirty::FinancesCurrentMonth));
         assert_eq!(
             products.cmds,
-            vec![Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
         assert!(errors.is_empty());
         assert_eq!(*state.movements, vec![updated]);
@@ -702,7 +703,7 @@ mod reducer_model_test {
         assert_eq!(*state.movements, expected_result);
         assert_eq!(
             products.cmds,
-            vec![Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
         assert!(errors.is_empty());
     }
@@ -742,7 +743,7 @@ mod reducer_model_test {
         assert_eq!(products.dirty, expected_dirty);
         assert_eq!(
             products.cmds,
-            vec![Cmd::Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
         assert!(errors.is_empty());
     }
@@ -776,7 +777,7 @@ mod reducer_model_test {
         );
         assert_eq!(
             products.cmds,
-            vec![Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
         assert!(errors.is_empty());
         assert_eq!(*state.movements, vec![updated]);
@@ -805,7 +806,7 @@ mod reducer_model_test {
         assert_eq!(products.dirty, dirty);
         assert_eq!(
             products.cmds,
-            vec![Cmd::Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
         assert!(errors.is_empty());
         assert!(state.movements.is_empty());
@@ -861,7 +862,7 @@ mod reducer_model_test {
         assert_eq!(*state.movements, expected);
         assert_eq!(
             products.cmds,
-            vec![Cmd::Subscribe(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
     }
 }

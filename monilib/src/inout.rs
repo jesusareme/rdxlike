@@ -12,6 +12,7 @@ use std::{
     time::SystemTime,
 };
 use uuid::Uuid;
+use rdxlib::subscribers::ViewOutput;
 
 #[data]
 #[derive(Clone, Debug, PartialEq)]
@@ -48,19 +49,6 @@ pub struct MoniStatistics {
     pub sum: Option<i64>,
     pub min: Option<i64>,
     pub max: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ViewToken { id: Uuid }
-impl From<Uuid> for ViewToken {
-    fn from(value: Uuid) -> Self {
-        ViewToken { id: value}
-    }
-}
-impl Display for ViewToken {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id)
-    }
 }
 
 #[data]
@@ -196,32 +184,31 @@ where
 {
     output: Arc<EventSubscription<V>>,
 }
+// 
+// impl<V> Debug for LibOutput<V>
+// where
+//     V: Debug + Send + 'static,
+// {
+//     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+//         write!(f, "LibOutput: {:?}", self.output)
+//     }
+// }
 
-impl<V> Debug for LibOutput<V>
+impl<V> ViewOutput<V> for LibOutput<V>
 where
     V: Send + 'static,
 {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "LibOutput")
-        // TODO: improve
-    }
-}
-
-impl<V> LibOutput<V>
-where
-    V: Send + 'static,
-{
-    pub fn new(capacity: usize) -> Self {
+    fn new(capacity: usize) -> Self {
         LibOutput {
             output: Arc::new(EventSubscription::new(capacity)),
         }
     }
 
-    pub fn send(&self, v: V) -> bool {
+    fn send(&self, v: V) -> bool {
         self.output.push_event(v)
     }
 
-    pub fn is_active(&self) -> bool {
+    fn is_active(&self) -> bool {
         self.output.is_active()
     }
 }
@@ -251,7 +238,6 @@ pub fn try_state_path(path: impl AsRef<Path>) -> Result<(), MoniError> {
         Ok(true)  => Ok(()),
         _ => Err(MoniError::new(MoniErrorType::Lib(LibErrorCause::Path))),
     }
-    // todo!("deeper check of permissions")
 }
 
 #[cfg(test)]

@@ -1,18 +1,12 @@
-use tracing::Subscriber;
+use rdxlib::messages::Message;
+use rdxlib::subscribers::ViewId;
 use crate::{inout::{LibOutput}, runtime::{Expense, PersistenceError}, MoniError, MoniExpensePlainListSnapshot};
-use crate::inout::{MoniStatistics, ViewToken};
-use crate::runtime::Statistics;
+use crate::inout::{MoniStatistics};
+use crate::runtime::{MoniMessage, Statistics};
 use crate::util::ExpenseId;
 
-#[derive(Debug)]
-pub enum Message {
-    Action(Action),
-    Lib(LibAction),
-}
-
-#[derive(Debug)]
 pub enum LibAction {
-    PlainListViewSubscription(ViewToken, LibOutput<MoniExpensePlainListSnapshot>),
+    PlainListViewSubscription(ViewId, LibOutput<MoniExpensePlainListSnapshot>),
     ErrorsSubscription(LibOutput<Vec<MoniError>>),
     StatisticsSubscription(LibOutput<MoniStatistics>),
 }
@@ -25,7 +19,7 @@ pub enum Action {
     Working(WorkingAction),
 }
 
-impl From<Action> for Message {
+impl From<Action> for Message<Action, LibAction> {
     fn from(action: Action) -> Self {
         Message::Action(action)
     }
@@ -45,8 +39,8 @@ pub enum WorkingAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunningAction {
-    ListViewHint(ViewToken, ExpenseId),
-    ListViewPrepare(ViewToken),
+    ListViewHint(ViewId, ExpenseId),
+    ListViewPrepare(ViewId),
 }
 
 
@@ -66,7 +60,7 @@ impl From<WorkingAction> for Action {
     }
 }
 
-impl From<WorkingAction> for Message {
+impl From<WorkingAction> for Message<Action, LibAction> {
     fn from(a: WorkingAction) -> Self {
         Action::from(a).into()
     }
@@ -84,9 +78,9 @@ impl From<RunningAction> for WorkingAction {
     }
 }
 
-impl From<LibAction> for Message {
+impl From<LibAction> for MoniMessage {
     fn from(value: LibAction) -> Self {
-        Message::Lib(value)
+        Message::Runtime(value)
     }
 }
 
@@ -96,7 +90,7 @@ impl From<RunningAction> for Action {
     }
 }
 
-impl From<RunningAction> for Message {
+impl From<RunningAction> for MoniMessage {
     fn from(a: RunningAction) -> Self {
         Action::from(a).into()
     }
@@ -108,7 +102,7 @@ impl From<ModelAction> for Action {
     }
 }
 
-impl From<ModelAction> for Message {
+impl From<ModelAction> for MoniMessage {
     fn from(a: ModelAction) -> Self {
         Action::from(a).into()
     }

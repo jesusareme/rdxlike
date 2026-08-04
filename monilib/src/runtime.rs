@@ -1,113 +1,64 @@
-mod cmd;
 mod middlewares;
 mod model_views;
 mod reducers;
-mod services;
 mod subscribers;
-mod threadpool;
+mod cmd;
+mod services;
 
 use crate::util::{ClockSource, ExpenseId};
-use crate::{MoniDomainError, MoniError, action::{Action::Init, *}, runtime::cmd::{DebounceAction, DebounceCmd, Subscription::Debounce}, util::{MessageSend, MessageSender, VersionedArc}};
-use Cmd::*;
-use DebounceAction::{Bump, Cancel};
-use DebounceCmd::DelayedSave;
+use crate::{MoniDomainError, MoniError, action::{Action::Init, *}, util::VersionedArc};
 use LibAction::{ErrorsSubscription, PlainListViewSubscription};
-use boltffi::data;
-use cmd::{Cmd, Subscription::Time};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
-use middlewares::{MiddlewareStore, MiddlewareConfig};
 use model_views::ClockedModelStateView;
+use rdxlib::cmd::Cmd;
 use serde::{Deserialize, Serialize};
-use services::{Service, Services};
+use services::Services;
 
 use std::collections::HashMap;
-use std::ops::{Add, AddAssign};
 use std::sync::Arc;
-use std::{
-    collections::VecDeque,
-    sync::mpsc::Receiver,
-};
-use subscribers::Subscriber;
-use tracing::{debug, error, info};
+use std::sync::mpsc::Receiver;
+
+use tracing::debug;
 pub use services::PersistenceError;
 use crate::action::LibAction::StatisticsSubscription;
-use crate::action::Message;
-use crate::inout::{PlainListItem, ViewToken};
+use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
+
+use crate::runtime::cmd::ServiceCommand;
+use crate::runtime::middlewares::MoniMiddleware;
+use crate::runtime::reducers::reducer;
+use rdxlib::messages::Message;
+use rdxlib::products::{ActionProducts, RuntimeProducts};
+use rdxlib::subscribers::ViewId;
+use rdxlib::threadpool::ThreadPool;
+use rdxlib::util::{MessageSend, MessageSender};
+use rdxlib::{Client, Runtime, RuntimeConfig};
+
 #[cfg(test)]
 use crate::testing::ref_id;
 #[cfg(test)]
 use std::cmp::Ordering;
+use boltffi::data;
+
+struct MoniLibClient;
+impl Client for MoniLibClient {
+    type State = State;
+    type Action = Action;
+    type RuntimeAction = LibAction;
+    type Flag = Dirty;
+    type ServiceCommand = ServiceCommand;
+}
+
+pub type MoniMessage = Message<Action, LibAction>;
+pub type MoniProducts = ActionProducts<MoniLibClient>;
+pub type MoniCommand = Cmd<MoniLibClient>;
+
 
 const MODEL_VERSION: u16 = 1;
 
-struct Products {
-    cmds: Vec<Cmd>,
-    dirty: EnumSet<Dirty>,
-}
-
-impl Add<Products> for Products {
-    type Output = Products;
-
-    #[allow(clippy::suspicious_op_assign_impl)]
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self, rhs: Products) -> Self::Output {
-        self.cmds.extend(rhs.cmds);
-        self.dirty |= rhs.dirty;
-        self
-    }
-}
-
-impl AddAssign<Products> for Products {
-    #[allow(clippy::suspicious_op_assign_impl)]
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add_assign(&mut self, rhs: Products) {
-        self.cmds.extend(rhs.cmds);
-        self.dirty |= rhs.dirty;
-    }
-}
-
-impl Products {
-    fn none() -> Self {
-        Products {
-            cmds: vec![],
-            dirty: EnumSet::empty(),
-        }
-    }
-
-    fn cmd(cmd: impl Into<Cmd>) -> Self {
-        Products {
-            cmds: vec![cmd.into()],
-            dirty: EnumSet::empty(),
-        }
-    }
-
-    fn cmds(cmds: Vec<Cmd>) -> Self {
-        Products {
-            cmds,
-            dirty: EnumSet::empty(),
-        }
-    }
-
-    fn with_delayed_save(mut self) -> Self {
-        self.cmds.push(DelayedSave(Bump).into());
-        self
-    }
-
-    fn with_dirty(mut self, flags: EnumSet<Dirty>) -> Self {
-        self.dirty |= flags;
-        self
-    }
-
-    fn with_dirty_flag(mut self, flag: Dirty) -> Self {
-        self.dirty |= flag;
-        self
-    }
-}
-
 #[derive(EnumSetType, Debug)]
-enum Dirty {
+pub enum Dirty {
     FinancesCurrentMonth,
     FinancesBeforeThisMonth,
     Categories,
@@ -115,30 +66,23 @@ enum Dirty {
     Views
 }
 
-pub struct RuntimeConfig {
-    pub messages_rx: Receiver<Message>,
-    pub actions_tx: MessageSender,
+pub struct RuntimeEnvironment {
+    pub messages_rx: Receiver<MoniMessage>,
+    pub actions_tx: MessageSender<MoniMessage>,
     pub logging_enabled: bool,
     pub path: String,
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-pub struct Runtime {
-    environment: Services,
-    middleware: MiddlewareStore,
-    state: State,
-    messages_rx: Receiver<Message>,
-    actions_tx: MessageSender,
-}
-
-impl Runtime {
-    pub fn new(config: RuntimeConfig) -> Self {
+    pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
         let environment = Services::new(&config.actions_tx, config.path, &config.clock);
-        let m_config = MiddlewareConfig {
-            logging_middleware: config.logging_enabled,
-            clock_source: config.clock,
-        };
-        let middleware = MiddlewareStore::new(m_config, reducers::reducer);
+
+        let mut funs= vec![];
+        if config.logging_enabled {
+            funs.push(MoniMiddleware::Logger);
+        }
+        funs.push(MoniMiddleware::Clock(config.clock));
+        funs.push(MoniMiddleware::Cleaner);
 
         let state = State::Zero(vec![]);
 
@@ -147,130 +91,41 @@ impl Runtime {
             .send_message(Init)
             .expect("Unable to prepare init of MoniLib");
 
+        let runtime_cfg = RuntimeConfig {
+            services: environment,
+            state,
+            middlewares: vec![],
+            reducer,
+            runtime_reducer,
+            jobs_dispatcher: ThreadPool::new(8),
+            messages_rx: config.messages_rx,
+            messages_tx: config.actions_tx,
+        };
+
         debug!("MoniLib ready to run...");
 
-        Runtime {
-            environment,
-            middleware,
-            state,
-            messages_rx: config.messages_rx,
-            actions_tx: config.actions_tx,
-        }
+        Runtime::new(runtime_cfg)
     }
 
-    pub fn run(self) {
-        let Runtime {
-            environment,
-            mut middleware,
-            mut state,
-            messages_rx: message_rx,
-            actions_tx,
-        } = self;
 
-        info!("Started running MoniLib...");
-
-        let mut subscribers: Vec<Box<dyn Subscriber>> = vec![];
-
-        let async_threads_pool = threadpool::ThreadPool::new(8);
-
-        for message in message_rx.iter() {
-            let mut actions: VecDeque<Message> = VecDeque::new();
-            actions.push_back(message);
-            let mut dirty = EnumSet::empty();
-
-            while let Some(message) = actions.pop_front() {
-                match message {
-                    Message::Action(action) => {
-                        let effects = middleware.run(&mut state, action);
-                        dirty |= effects.dirty;
-
-                        for cmd in effects.cmds {
-                            process_command(
-                                cmd,
-                                &environment,
-                                &async_threads_pool,
-                                &actions_tx,
-                                &mut actions,
-                            );
-                        }
-                    }
-                    Message::Lib(lib_message) => {
-                        if let Some(result) = process_lib_messages(lib_message, &mut subscribers) {
-                            actions.push_back(result.into());
-                        }
-                    }
-                }
-            }
-
-            subscribers.retain(|s| s.is_active());
-            subscribers
-                .iter_mut()
-                .filter(|s| s.interested_in(&dirty))
-                .filter_map(|s| s.notify(&state).err() )
-                .for_each(|e| error!("Subscriber error: {e}"));
-
-        }
-    }
-}
-
-fn process_command(
-    cmd: Cmd,
-    environment: &Services,
-    threads_pool: &threadpool::ThreadPool,
-    actions_tx: &impl MessageSend,
-    actions: &mut VecDeque<Message>,
-) {
-    match cmd {
-        Direct(new_work_actions) => {
-            actions.extend(new_work_actions.into_iter().map(Into::into));
-        }
-        Queue(new_work_actions) => {
-            new_work_actions.into_iter().for_each(|a| {
-                _ = actions_tx.send_message(a).inspect_err(|e| {
-                    error!("Error while sending new actions from Queue command: {e:?}");
-                });
-            });
-        }
-        Async(cmd) => {
-            threads_pool.submit(cmd.into_job(), actions_tx);
-        }
-        Persistence(basic_service_cmd) => {
-            environment.persistence.execute(basic_service_cmd);
-        }
-        Subscribe(subs) => match subs {
-            Time(cmd) => {
-                environment.timers.submit(cmd.into());
-            }
-            Debounce(cmd) => {
-                let DelayedSave(ref action) = cmd;
-                match action {
-                    Bump => environment.timers.submit(cmd.into()),
-                    Cancel => environment.timers.remove(cmd.into()),
-                }
-            }
-        },
-    }
-}
-
-fn process_lib_messages(
+fn runtime_reducer(
     lib_message: LibAction,
-    subscribers: &mut Vec<Box<dyn Subscriber>>,
-) -> Option<impl Into<Message>> {
+) -> RuntimeProducts<MoniLibClient> {
     match lib_message {
         PlainListViewSubscription(token, out) => {
             let new_subscription = subscribers::plain_list_view_subscriber(token, out);
-            subscribers.push(Box::new(new_subscription));
-            Some(RunningAction::ListViewPrepare(token))
+            RuntimeProducts {
+                subscriber: Some(Box::new(new_subscription)),
+                actions: vec![RunningAction::ListViewPrepare(token).into()]
+            }
         }
         ErrorsSubscription(out) => {
             let new_subscription = subscribers::errors_subscriber(out);
-            subscribers.push(Box::new(new_subscription));
-            None
+            RuntimeProducts::subscriber(new_subscription)
         }
         StatisticsSubscription(out) => {
             let new_subscription = statistics_subscriber(out);
-            subscribers.push(Box::new(new_subscription));
-            None
+            RuntimeProducts::subscriber(new_subscription)
         }
     }
 }
@@ -429,19 +284,5 @@ struct RunningState {
     // counting_cancellation: Option<DropCancellation>,
     time: Zoned,
     errors: Vec<MoniError>,
-    plain_list: HashMap<ViewToken, PlainListViewState>
-}
-
-impl threadpool::ThreadPool {
-    pub fn submit(
-        &self,
-        action_job: impl FnOnce() -> Action + Send + 'static,
-        action_sender: &impl MessageSend,
-    ) {
-        let async_actions_tx = action_sender.clone();
-        self.work_on(move || {
-            let action = action_job();
-            async_actions_tx.send_message(action).unwrap();
-        });
-    }
+    plain_list: HashMap<ViewId, PlainListViewState>
 }

@@ -1,12 +1,10 @@
 mod timers;
 pub use timers::Timers;
 
-use super::{ModelState, cmd::PersistenceCmd};
+use super::{ModelState, MoniMessage, cmd::PersistenceCmd};
+use crate::action::{Action, WorkingAction};
 use crate::util::ClockSource;
-use crate::{
-    action::{Action, WorkingAction},
-    util::MessageSend,
-};
+use rdxlib::util::MessageSend;
 use std::sync::Arc;
 use std::{
     error::Error,
@@ -17,8 +15,7 @@ use std::{
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
 };
-
-use tracing::debug;
+use tracing::{debug, error};
 
 pub struct Services {
     pub persistence: PersistenceService,
@@ -27,7 +24,7 @@ pub struct Services {
 
 impl Services {
     pub fn new(
-        actions_sender: &impl MessageSend,
+        actions_sender: &impl MessageSend<Message=MoniMessage>,
         base_path: impl AsRef<Path>,
         clock: &Arc<dyn ClockSource + Send + Sync>,
     ) -> Self {
@@ -87,7 +84,7 @@ pub struct PersistenceService {
 }
 
 impl PersistenceService {
-    pub fn new(action_sender: &impl MessageSend, context: impl PersistenceApi + Send + 'static) -> Self {
+    pub fn new(action_sender: &impl MessageSend<Message=MoniMessage>, context: impl PersistenceApi + Send + 'static) -> Self {
         let (sender, receiver) = mpsc::channel::<Option<PersistenceCmd>>();
         let action_sender = action_sender.clone();
         let builder = thread::Builder::new().name("PersistenceService.thread".to_string());
@@ -95,7 +92,10 @@ impl PersistenceService {
             debug!("PersistenceService started");
             while let Some(to_execute) = receiver.recv().unwrap() {
                 let action = Self::chooser(to_execute, &context);
-                action_sender.send_message(action).unwrap();
+                if action_sender.send_message(action).is_err() {
+                    error!("PersistenceService: Unable to send resulting action");
+                    break;
+                }
             }
             debug!("BasicService ended");
         });

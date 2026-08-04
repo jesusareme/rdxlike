@@ -1,177 +1,48 @@
-use super::{Dirty, Expense, PlainListViewState, State, Statistics, VersionedArc, WorkingState};
-use crate::inout::{LibOutput, MoniStatistics, ViewToken};
-use crate::runtime::subscribers::ComparableResult::{Comparable, NothingToCompare};
+use super::{Dirty, Expense, MoniLibClient, PlainListViewState, State, Statistics, VersionedArc, WorkingState};
+use crate::inout::{LibOutput, MoniStatistics};
 use crate::util::ExpenseId;
 use crate::{MoniError, MoniExpensePlainListSnapshot};
 use enumset::EnumSet;
 use jiff::Timestamp;
+use rdxlib::subscribers::ComparableResult::{self, Comparable, NothingToCompare};
+use rdxlib::subscribers::{OutputSubscriber, Subscriber, SubscriberError, ViewId, ViewTransformer};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::ops::Sub;
-use std::{
-    fmt::Debug,
-    sync::mpsc::{self, Sender},
-    thread,
-};
-use tracing::{debug, error};
+use std::fmt::Debug;
+use tracing::error;
 use uuid::Uuid;
 
-#[derive(Debug)]
-pub enum SubscriberError {
-    MissingState,
-    UnableToNotifyViewProcessor,
-}
-impl Display for SubscriberError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SubscriberError::MissingState => write!(f, "Missing required state."),
-            SubscriberError::UnableToNotifyViewProcessor => {
-                write!(f, "Unable to notify view processor.")
-            }
-        }
-    }
-}
-
-pub trait Subscriber {
-    fn notify(&mut self, new_state: &State) -> Result<(), SubscriberError>;
-    fn is_active(&self) -> bool;
-    fn interested_in(&self, offered: &EnumSet<Dirty>) -> bool;
-}
-
-#[derive(Debug, PartialEq)]
-pub enum ComparableResult<T> {
-    /// No comparison is possible to any previous state because current state is undefined or
-    /// incompatible with the intended subscription
-    NothingToCompare,
-    /// Comparison is possible to a previous state because we have a well-defined current value
-    Comparable(T),
-}
-
-pub trait ViewTransformer: Send + 'static {
-    type Slice: Send;
-    type ComparableValue: PartialEq;
-    type Product: Send;
-
-    /// Indicates caller whether this subscriber will potentially be notifiable based on rough
-    /// estimation expressed by `Dirty` flags.
-    fn interested_in(offered: &EnumSet<Dirty>) -> bool;
-
-    /// Returns a `ComparableResult::Comparable` value used to identify relevant changes in the
-    /// model. A new derived state to feed a view will be generated if the comparison is
-    /// favorable (previous value returned from this function is different from the one before).
-    /// First execution of a `ViewTransformer` will always generate a new state derivation as
-    /// long as this functions doesn't return a `ComparableResult::NothingToCompare` result.
-    fn comparable(state: &State, token: ViewToken) -> ComparableResult<Self::ComparableValue>;
-
-    /// Extracts the minimum thread-safe slice from the original state needed to calculate the
-    /// final information the view needs.
-    fn slice(state: &State, token: ViewToken) -> Result<Self::Slice, SubscriberError>;
-
-    /// Derives the final data needed by the view. This method is executed on its own
-    /// thread.
-    fn derive(&mut self, slice: Self::Slice) -> Option<Self::Product>;
-}
-
-impl Error for SubscriberError {}
-struct OutputSubscriber<T: ViewTransformer> {
-    id: ViewToken,
-    last: Option<T::ComparableValue>,
-    sender: Sender<Option<T::Slice>>,
-    output: LibOutput<T::Product>,
-}
-
-impl<T: ViewTransformer> OutputSubscriber<T> {
-    pub fn new(id: ViewToken, transformer: T, output: LibOutput<T::Product>) -> Self {
-        let (sender, receiver) = mpsc::channel::<Option<T::Slice>>();
-        let builder = thread::Builder::new().name(id.to_string());
-        let output_clone = output.clone();
-        _ = builder.spawn(move || {
-            let mut transformer = transformer;
-            while let Some(slice) = receiver.recv().unwrap() {
-                if output_clone.is_active() {
-                    if let Some(product) = transformer.derive(slice) {
-                        output_clone.send(product);
-                    }
-                } else {
-                    break;
-                }
-            }
-            debug!("dropping thread for output subscriber: {}", id)
-        });
-        OutputSubscriber {
-            id,
-            last: None,
-            sender,
-            output,
-        }
-    }
-}
-
-impl<T: ViewTransformer> Subscriber for OutputSubscriber<T> {
-    fn notify(&mut self, new_state: &State) -> Result<(), SubscriberError> {
-        let Comparable(current_comparable) = T::comparable(new_state, self.id) else {
-            return Ok(());
-        };
-
-        let current_comparable = Some(current_comparable);
-
-        if self.last != current_comparable {
-            self.last = current_comparable;
-            let slice = T::slice(new_state, self.id)?;
-            self.sender
-                .send(Some(slice))
-                .map_err(|_| SubscriberError::UnableToNotifyViewProcessor)?;
-        }
-        Ok(())
-    }
-
-    fn is_active(&self) -> bool {
-        self.output.is_active()
-    }
-
-    fn interested_in(&self, offered: &EnumSet<Dirty>) -> bool {
-        T::interested_in(offered)
-    }
-}
-
-impl<T: ViewTransformer> Drop for OutputSubscriber<T> {
-    fn drop(&mut self) {
-        _ = self.sender.send(None)
-    }
-}
-
 pub fn plain_list_view_subscriber(
-    id: ViewToken,
+    id: ViewId,
     out: LibOutput<MoniExpensePlainListSnapshot>,
-) -> impl Subscriber {
+) -> impl Subscriber<State=State, Flag=Dirty> {
     OutputSubscriber::new(id, PlainListTransformer::new(), out)
 }
 
-pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> impl Subscriber {
+pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> impl Subscriber<State=State, Flag=Dirty> {
     OutputSubscriber::new(Uuid::new_v4().into(), BusinessErrorsTransformer, out)
 }
 
 struct BusinessErrorsTransformer;
 
-impl ViewTransformer for BusinessErrorsTransformer {
-    type Slice = Vec<MoniError>;
+impl ViewTransformer<MoniLibClient> for BusinessErrorsTransformer {
     type ComparableValue = Vec<Uuid>;
+    type Slice = Vec<MoniError>;
     type Product = Vec<MoniError>;
 
     fn interested_in(_: &EnumSet<Dirty>) -> bool {
         true
     }
 
-    fn comparable(state: &State, _token: ViewToken) -> ComparableResult<Self::ComparableValue> {
+    fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
         if let State::Working(WorkingState { model: _, running }) = &state {
             return Comparable(running.errors.iter().map(|e| e.id).collect());
         }
         NothingToCompare
     }
 
-    fn slice(state: &State, _token: ViewToken) -> Result<Self::Slice, SubscriberError> {
+    fn slice(state: &State, _token: ViewId) -> Result<Self::Slice, SubscriberError> {
         if let State::Working(WorkingState { model: _, running }) = &state {
             return Ok(running.errors.clone());
         }
@@ -219,16 +90,16 @@ impl PlainListTransformer {
 
 struct StatisticsTransformer;
 
-impl ViewTransformer for StatisticsTransformer {
-    type Slice = Statistics;
+impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
     type ComparableValue = Timestamp;
+    type Slice = Statistics;
     type Product = MoniStatistics;
 
     fn interested_in(offered: &EnumSet<Dirty>) -> bool {
         offered.contains(Dirty::Statistics)
     }
 
-    fn comparable(state: &State, _token: ViewToken) -> ComparableResult<Self::ComparableValue> {
+    fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
         if let State::Working(working) = state {
             // This subscription depends entirely on this pre-calculated value being present
             let Some(current) = working.model.statistics_all else {
@@ -240,7 +111,7 @@ impl ViewTransformer for StatisticsTransformer {
         }
     }
 
-    fn slice(state: &State, _token: ViewToken) -> Result<Self::Slice, SubscriberError> {
+    fn slice(state: &State, _token: ViewId) -> Result<Self::Slice, SubscriberError> {
         let State::Working(working) = state else {
             return Err(SubscriberError::MissingState);
         };
@@ -263,13 +134,13 @@ impl ViewTransformer for StatisticsTransformer {
     }
 }
 
-pub fn statistics_subscriber(out: LibOutput<MoniStatistics>) -> impl Subscriber {
+pub fn statistics_subscriber(out: LibOutput<MoniStatistics>) -> impl Subscriber<State=State, Flag=Dirty> {
     OutputSubscriber::new(Uuid::new_v4().into(), StatisticsTransformer, out)
 }
 
-impl ViewTransformer for PlainListTransformer {
-    type Slice = PlainListStateSlice;
+impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     type ComparableValue = PlainListComparable;
+    type Slice = PlainListStateSlice;
     type Product = MoniExpensePlainListSnapshot;
 
     fn interested_in(offered: &EnumSet<Dirty>) -> bool {
@@ -279,7 +150,7 @@ impl ViewTransformer for PlainListTransformer {
             .is_empty()
     }
 
-    fn comparable(state: &State, id: ViewToken) -> ComparableResult<Self::ComparableValue> {
+    fn comparable(state: &State, id: ViewId) -> ComparableResult<Self::ComparableValue> {
         let State::Working(working) = state else {
             return NothingToCompare;
         };
@@ -294,7 +165,7 @@ impl ViewTransformer for PlainListTransformer {
         )
     }
 
-    fn slice(state: &State, id: ViewToken) -> Result<Self::Slice, SubscriberError> {
+    fn slice(state: &State, id: ViewId) -> Result<Self::Slice, SubscriberError> {
         let State::Working(working) = state else {
             return Err(SubscriberError::MissingState);
         };
@@ -812,7 +683,7 @@ mod tests {
 
     #[rstest]
     fn p_list_comparable_reflects_hint_changes(expenses: [Expense; 20]) {
-        let token = ViewToken::from(Uuid::now_v7());
+        let token = ViewId::from(Uuid::now_v7());
         let mut working = WorkingState::default();
         working.model.movements = VersionedArc::from(Vec::from(expenses.clone()));
         let mut state = State::Working(working);

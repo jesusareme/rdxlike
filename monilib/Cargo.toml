@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
-boltffi = "0.28.0"
+boltffi = "0.29"
 uuid = {  version = "1", features = ["serde", "v4", "v7"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -18,7 +18,7 @@ enumset = "1.1"
 rand = "0.10.1"
 itertools = "0.15.0"
 log = "0.4.29"
-#rdxlib = { path = "../rdxlib"}
+rdxlib = { path = "../rdxlib"}
 
 [dev-dependencies]
 proptest = "1.11.0"

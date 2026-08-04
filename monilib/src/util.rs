@@ -1,4 +1,3 @@
-use crate::action::Message;
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -12,26 +11,6 @@ use std::{
 use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
 
-pub trait MessageSend: Clone + Send + 'static {
-    fn send_message(&self, message: impl Into<Message>) -> Result<(), SendError<Message>>;
-}
-
-#[derive(Clone)]
-pub struct MessageSender {
-    tx: Sender<Message>,
-}
-
-impl MessageSender {
-    pub fn new(tx: Sender<Message>) -> Self {
-        MessageSender { tx }
-    }
-}
-
-impl MessageSend for MessageSender {
-    fn send_message(&self, message: impl Into<Message>) -> Result<(), SendError<Message>> {
-        self.tx.send(message.into())
-    }
-}
 
 pub trait ClockSource {
     fn now_civil(&self) -> Zoned;
