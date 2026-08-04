@@ -73,35 +73,36 @@ fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> MoniProdu
         WatchdogWatching => {
             debug!("watchdog watching!");
             MoniProducts::none()
-        } // Action::DelayedSave => {
-          //
-          // }
+        }
+        // Action::DelayedSave => {
+        //
+        // }
 
-          // Action::AddToInfo(text) => Products::none(),
-          // Action::AddFromLongCalculation => {
-          // 	let counter = state.counter.clone(); // we can move values for later use
-          // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
-          // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
-          // }
-          // Action::AddEverySecond(interval) => {
-          // 	let operation = DropCancellation::new(Uuid::new_v4());
-          // 	let handle = operation.cancellation_handle();
-          // 	state.counting = Some(operation);
-          //
-          // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
-          // 		interval,
-          // 		handle,
-          // 	}));
-          // 	Products::cmd(cmd)
-          // }
-          // Action::AddFromAsync => {
-          // 	let counter = state.counter;
-          // 	let cmd = Cmd::Async(Box::new(move || {
-          // 		thread::sleep(Duration::from_secs(1));
-          // 		Action::Add(counter * 2)
-          // 	}));
-          // 	Products::cmd(cmd)
-          // }
+        // Action::AddToInfo(text) => Products::none(),
+        // Action::AddFromLongCalculation => {
+        // 	let counter = state.counter.clone(); // we can move values for later use
+        // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
+        // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
+        // }
+        // Action::AddEverySecond(interval) => {
+        // 	let operation = DropCancellation::new(Uuid::new_v4());
+        // 	let handle = operation.cancellation_handle();
+        // 	state.counting = Some(operation);
+        //
+        // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
+        // 		interval,
+        // 		handle,
+        // 	}));
+        // 	Products::cmd(cmd)
+        // }
+        // Action::AddFromAsync => {
+        // 	let counter = state.counter;
+        // 	let cmd = Cmd::Async(Box::new(move || {
+        // 		thread::sleep(Duration::from_secs(1));
+        // 		Action::Add(counter * 2)
+        // 	}));
+        // 	Products::cmd(cmd)
+        // }
     }
 }
 

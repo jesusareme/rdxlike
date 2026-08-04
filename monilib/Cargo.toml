@@ -16,10 +16,10 @@ tracing-subscriber = { version = "*", features = ["env-filter"] }
 jiff = { version = "0.2.31", features = ["serde", "std"] }
 enumset = "1.1"
 rand = "0.10.1"
-itertools = "0.15.0"
 log = "0.4.29"
 rdxlib = { path = "../rdxlib"}
 
 [dev-dependencies]
 proptest = "1.11.0"
 rstest = "0.26.1"
+itertools = "0.15.0"

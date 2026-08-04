@@ -1,12 +1,16 @@
+mod cmd;
 mod middlewares;
 mod model_views;
 mod reducers;
-mod subscribers;
-mod cmd;
 mod services;
+mod subscribers;
 
 use crate::util::{ClockSource, ExpenseId};
-use crate::{MoniDomainError, MoniError, action::{Action::Init, *}, util::VersionedArc};
+use crate::{
+    MoniDomainError, MoniError,
+    action::{Action::Init, *},
+    util::VersionedArc,
+};
 use LibAction::{ErrorsSubscription, PlainListViewSubscription};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
@@ -19,11 +23,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use tracing::debug;
-pub use services::PersistenceError;
 use crate::action::LibAction::StatisticsSubscription;
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
+pub use services::PersistenceError;
+use tracing::debug;
 
 use crate::runtime::cmd::ServiceCommand;
 use crate::runtime::middlewares::MoniMiddleware;
@@ -37,9 +41,10 @@ use rdxlib::{Client, Runtime, RuntimeConfig};
 
 #[cfg(test)]
 use crate::testing::ref_id;
+use boltffi::data;
+use rdxlib::middleware::ChainableMiddleware;
 #[cfg(test)]
 use std::cmp::Ordering;
-use boltffi::data;
 
 pub(crate) struct MoniLibClient;
 impl Client for MoniLibClient {
@@ -54,7 +59,6 @@ pub type MoniMessage = Message<Action, LibAction>;
 pub type MoniProducts = ActionProducts<MoniLibClient>;
 pub type MoniCommand = Cmd<MoniLibClient>;
 
-
 const MODEL_VERSION: u16 = 1;
 
 #[derive(EnumSetType, Debug)]
@@ -63,7 +67,7 @@ pub enum Dirty {
     FinancesBeforeThisMonth,
     Categories,
     Statistics,
-    Views
+    Views,
 }
 
 pub struct RuntimeEnvironment {
@@ -74,49 +78,46 @@ pub struct RuntimeEnvironment {
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-    pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
-        let environment = Services::new(&config.actions_tx, config.path, &config.clock);
+pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
+    let environment = Services::new(&config.actions_tx, config.path, &config.clock);
 
-        let mut funs= vec![];
-        if config.logging_enabled {
-            funs.push(MoniMiddleware::Logger);
-        }
-        funs.push(MoniMiddleware::Clock(config.clock));
-        funs.push(MoniMiddleware::Cleaner);
-
-        let state = State::Zero(vec![]);
-
-        config
-            .actions_tx
-            .send_message(Init)
-            .expect("Unable to prepare init of MoniLib");
-
-        let runtime_cfg = RuntimeConfig {
-            services: environment,
-            state,
-            middlewares: vec![],
-            reducer,
-            runtime_reducer,
-            jobs_dispatcher: ThreadPool::new(8),
-            messages_rx: config.messages_rx,
-            messages_tx: config.actions_tx,
-        };
-
-        debug!("MoniLib ready to run...");
-
-        Runtime::new(runtime_cfg)
+    let mut funs = vec![];
+    if config.logging_enabled {
+        funs.push(MoniMiddleware::Logger);
     }
+    funs.push(MoniMiddleware::Clock(config.clock));
+    funs.push(MoniMiddleware::Cleaner);
 
+    let state = State::Zero(vec![]);
 
-fn runtime_reducer(
-    lib_message: LibAction,
-) -> RuntimeProducts<MoniLibClient> {
+    config
+        .actions_tx
+        .send_message(Init)
+        .expect("Unable to prepare init of MoniLib");
+
+    let runtime_cfg = RuntimeConfig {
+        services: environment,
+        state,
+        middlewares: funs.into_iter().map(MoniMiddleware::boxed).collect(),
+        reducer,
+        runtime_reducer,
+        jobs_dispatcher: ThreadPool::new(8),
+        messages_rx: config.messages_rx,
+        messages_tx: config.actions_tx,
+    };
+
+    debug!("MoniLib ready to run...");
+
+    Runtime::new(runtime_cfg)
+}
+
+fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
     match lib_message {
         PlainListViewSubscription(token, out) => {
             let new_subscription = subscribers::plain_list_view_subscriber(token, out);
             RuntimeProducts {
                 subscriber: Some(Box::new(new_subscription)),
-                actions: vec![RunningAction::ListViewPrepare(token).into()]
+                actions: vec![RunningAction::ListViewPrepare(token).into()],
             }
         }
         ErrorsSubscription(out) => {
@@ -243,7 +244,7 @@ pub struct Statistics {
     pub at_movements_version: u64,
     pub requested_at: Timestamp,
     pub items_len: usize,
-    pub results: Option<StatisticsResults>
+    pub results: Option<StatisticsResults>,
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Copy)]
@@ -284,5 +285,11 @@ struct RunningState {
     // counting_cancellation: Option<DropCancellation>,
     time: Zoned,
     errors: Vec<MoniError>,
-    plain_list: HashMap<ViewId, PlainListViewState>
+    plain_list: HashMap<ViewId, PlainListViewState>,
+}
+
+impl MoniMiddleware {
+    fn boxed(self) -> Box<dyn ChainableMiddleware<MoniLibClient>> {
+        Box::new(self)
+    }
 }
