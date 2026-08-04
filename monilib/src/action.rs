@@ -11,7 +11,7 @@ pub enum LibAction {
     StatisticsSubscription(LibOutput<MoniStatistics>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Action {
     NoOp,
     Init,

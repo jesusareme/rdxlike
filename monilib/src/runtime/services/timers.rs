@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::debug;
 use rdxlib::util::MessageSend;
+use crate::runtime::MoniMessage;
 
 pub struct Timers {
     tx: Sender<TimersMessage>,
@@ -98,7 +99,7 @@ impl Timer {
 }
 
 impl Timers {
-    pub fn new(action_tx: &impl MessageSend, clock: &Arc<dyn ClockSource + Send + Sync>) -> Self {
+    pub fn new(action_tx: &impl MessageSend<Message=MoniMessage>, clock: &Arc<dyn ClockSource + Send + Sync>) -> Self {
         let action_tx = action_tx.clone();
         let (tx, rx) = mpsc::channel();
         let clock_clone = Arc::clone(clock);

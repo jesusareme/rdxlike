@@ -481,7 +481,7 @@ mod reducer_model_test {
         assert_eq!(products.dirty, dirty);
         assert_eq!(
             products.cmds,
-            vec![Env(Debounce(DelayedSave(Bump)))]
+            vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
 
         assert!(errors.is_empty());

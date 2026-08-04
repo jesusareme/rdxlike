@@ -26,13 +26,27 @@ impl<A> PartialEq for AsyncTask<A> {
     }
 }
 
-#[derive(PartialEq)]
 pub enum Cmd<C: Client>
 {
     Direct(Vec<C::Action>),
     Queue(Vec<C::Action>),
     Async(AsyncTask<C::Action>),
     Env(C::ServiceCommand),
+}
+
+impl<C: Client> PartialEq for Cmd<C>
+where
+    C::Action: PartialEq,
+    C::ServiceCommand: PartialEq {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Cmd::Direct(a), Cmd::Direct(b)) => a == b,
+            (Cmd::Queue(a), Cmd::Queue(b)) => a == b,
+            (Cmd::Async(a), Cmd::Async(b)) => a == b,
+            (Cmd::Env(a), Cmd::Env(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl<C: Client> Debug for Cmd<C>

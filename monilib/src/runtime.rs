@@ -41,7 +41,7 @@ use crate::testing::ref_id;
 use std::cmp::Ordering;
 use boltffi::data;
 
-struct MoniLibClient;
+pub(crate) struct MoniLibClient;
 impl Client for MoniLibClient {
     type State = State;
     type Action = Action;
@@ -131,13 +131,13 @@ fn runtime_reducer(
 }
 
 #[derive(Debug)]
-enum State {
+pub(crate) enum State {
     Zero(Vec<WorkingAction>),
     Working(WorkingState),
 }
 
 #[derive(Debug, Default)]
-struct WorkingState {
+pub(crate) struct WorkingState {
     model: ModelState,
     running: RunningState,
 }

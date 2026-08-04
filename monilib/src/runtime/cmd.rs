@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
 use std::{thread, time::Duration};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ServiceCommand {
     Persistence(PersistenceCmd),
     Subscribe(Subscription),

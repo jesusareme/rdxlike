@@ -14,7 +14,7 @@ use action::*;
 use boltffi::{EventSubscription, data, error, export, ffi_stream};
 use log::warn;
 use rdxlib::messages::Message;
-use rdxlib::subscribers::ViewId;
+use rdxlib::subscribers::{ViewId, ViewOutput};
 use rdxlib::util::{MessageSend, MessageSender};
 use std::error::Error;
 use std::{

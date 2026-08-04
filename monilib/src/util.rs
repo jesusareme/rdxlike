@@ -1,14 +1,13 @@
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Debug, Display, Formatter};
 use std::time::Instant;
 use std::{
-    ops::{Deref},
+    ops::Deref,
     sync::{
         Arc, RwLock,
-        mpsc::{SendError, Sender},
     },
 };
-use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
 
 
