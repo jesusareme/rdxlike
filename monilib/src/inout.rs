@@ -160,7 +160,7 @@ impl MoniExpense {
 }
 
 impl MoniExpense {
-    const AMOUNT_LIMIT: i64 = 100_000_000;
+    const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
 
     fn validated_amount(amount: i64) -> Result<i64, MoniValidationError> {
         if (-Self::AMOUNT_LIMIT..=Self::AMOUNT_LIMIT).contains(&amount) {
@@ -192,15 +192,6 @@ where
 {
     output: Arc<EventSubscription<V>>,
 }
-//
-// impl<V> Debug for LibOutput<V>
-// where
-//     V: Debug + Send + 'static,
-// {
-//     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-//         write!(f, "LibOutput: {:?}", self.output)
-//     }
-// }
 
 impl<V> ViewOutput<V> for LibOutput<V>
 where
