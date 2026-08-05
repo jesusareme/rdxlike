@@ -50,9 +50,11 @@ fn unreadable_state_should_report_error_as_view() {
     let errors_out = lib.errors();
 
     wait();
+
     let Some(errors) = errors_out.pop_event() else {
         panic!("Library should have reported back some error on its output")
     };
+    assert_matches!(errors_out.pop_event(), None);
 
     assert_eq!(
         errors.len(),
