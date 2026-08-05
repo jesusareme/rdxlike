@@ -1,4 +1,4 @@
-use super::{Dirty, Expense, MoniLibClient, PlainListViewState, State, Statistics, VersionedArc, WorkingState};
+use super::{AppState, Dirty, Expense, MoniLibClient, PlainListViewState, State, Statistics, VersionedArc};
 use crate::inout::{LibOutput, MoniStatistics};
 use crate::util::ExpenseId;
 use crate::{MoniError, MoniExpensePlainListSnapshot};
@@ -22,13 +22,16 @@ pub fn plain_list_view_subscriber(
 }
 
 pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
-    OutputSubscriber::new(Uuid::new_v4().into(), BusinessErrorsTransformer, out)
+    OutputSubscriber::new(Uuid::new_v4().into(), ErrorsViewTransformer::default(), out)
 }
 
-struct BusinessErrorsTransformer;
+#[derive(Default)]
+struct ErrorsViewTransformer {
+    last_consumed_id: Option<Uuid>
+}
 
-impl ViewTransformer<MoniLibClient> for BusinessErrorsTransformer {
-    type ComparableValue = Vec<Uuid>;
+impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
+    type ComparableValue = Uuid;
     type Slice = Vec<MoniError>;
     type Product = Vec<MoniError>;
 
@@ -37,25 +40,42 @@ impl ViewTransformer<MoniLibClient> for BusinessErrorsTransformer {
     }
 
     fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
-        match state {
-            State::Working(WorkingState { model: _, running }) => {
-                Comparable(running.errors.iter().map(|e| e.id).collect())
-            }
-            State::Failed(error) => Comparable(vec![error.id]),
-            State::Zero(_) => NothingToCompare,
-        }
+        state.running.errors
+            .last()
+            .map_or_else(|| NothingToCompare, |last| Comparable(last.id))
     }
 
     fn slice(state: &State, _token: ViewId) -> Result<Self::Slice, SubscriberError> {
-        match state {
-            State::Working(WorkingState { model: _, running }) => Ok(running.errors.clone()),
-            State::Failed(error) => Ok(vec![error.clone()]),
-            State::Zero(_) => Err(SubscriberError::MissingState),
-        }
+        Ok(state.running.errors.clone())
     }
 
     fn derive(&mut self, slice: Self::Slice) -> Option<Self::Product> {
-        if !slice.is_empty() { Some(slice) } else { None }
+        let Some(last) = slice.last() else {
+            return None
+        };
+        let last = last.id;
+        let mut new_errors = vec![];
+        if let Some(last_processed_id) = self.last_consumed_id {
+            new_errors.extend(
+                slice.into_iter()
+                .rev()
+                .map_while(|error| {
+                if error.id != last_processed_id {
+                    Some(error)
+                } else {
+                    None
+                }})
+            );
+        } else {
+            new_errors = slice;
+        }
+
+        if new_errors.len() > 0 {
+            self.last_consumed_id = Some(last);
+            Some(new_errors)
+        } else {
+            None
+        }
     }
 }
 
@@ -105,9 +125,9 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
     }
 
     fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
-        if let State::Working(working) = state {
+        if let AppState::Working(working) = &state.app {
             // This subscription depends entirely on this pre-calculated value being present
-            let Some(current) = working.model.statistics_all else {
+            let Some(current) = working.statistics_all else {
                 return NothingToCompare;
             };
             Comparable(current.requested_at)
@@ -117,11 +137,11 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
     }
 
     fn slice(state: &State, _token: ViewId) -> Result<Self::Slice, SubscriberError> {
-        let State::Working(working) = state else {
+        let AppState::Working(model) = &state.app else {
             return Err(SubscriberError::MissingState);
         };
 
-        let Some(statistics) = working.model.statistics_all else {
+        let Some(statistics) = model.statistics_all else {
             return Err(SubscriberError::MissingState);
         };
 
@@ -156,14 +176,15 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     }
 
     fn comparable(state: &State, id: ViewId) -> ComparableResult<Self::ComparableValue> {
-        let State::Working(working) = state else {
+        let AppState::Working(model) = &state.app else {
             return NothingToCompare;
         };
-        working.running.plain_list.get(&id).map_or_else(
+
+        state.running.plain_list.get(&id).map_or_else(
             || NothingToCompare,
             |v| {
                 Comparable(PlainListComparable {
-                    movements_version: working.model.movements.version(),
+                    movements_version: model.movements.version(),
                     hint: v.hint,
                 })
             },
@@ -171,16 +192,17 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     }
 
     fn slice(state: &State, id: ViewId) -> Result<Self::Slice, SubscriberError> {
-        let State::Working(working) = state else {
+        let AppState::Working(model) = &state.app else {
             return Err(SubscriberError::MissingState);
         };
-        let view_state = working
+
+        let view_state = state
             .running
             .plain_list
             .get(&id)
             .ok_or(SubscriberError::MissingState)?;
         Ok(PlainListStateSlice {
-            expenses: working.model.movements.clone(),
+            expenses: model.movements.clone(),
             view_state: *view_state,
         })
     }
@@ -288,7 +310,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
 mod tests {
     use super::*;
     use crate::inout::PlainListItem;
-    use crate::runtime::WorkingState;
+    use crate::runtime::ModelState;
     use crate::testing::{contemporary_ref_date, distant_past_ref_date, ordered_expenses};
     use jiff::ToSpan;
     use rstest::{fixture, rstest};
@@ -689,19 +711,20 @@ mod tests {
     #[rstest]
     fn p_list_comparable_reflects_hint_changes(expenses: [Expense; 20]) {
         let token = ViewId::from(Uuid::now_v7());
-        let mut working = WorkingState::default();
-        working.model.movements = VersionedArc::from(Vec::from(expenses.clone()));
-        let mut state = State::Working(working);
+        let mut state = State {
+            app: AppState::Working(ModelState {
+                movements: VersionedArc::from(Vec::from(expenses.clone())),
+                ..ModelState::default()
+            }),
+            ..State::default()
+        };
 
         assert_eq!(
             PlainListTransformer::comparable(&state, token),
             NothingToCompare
         );
 
-        let State::Working(working) = &mut state else {
-            unreachable!()
-        };
-        working
+        state
             .running
             .plain_list
             .insert(token, PlainListViewState { hint: None });
@@ -713,10 +736,7 @@ mod tests {
             Comparable(before)
         );
 
-        let State::Working(working) = &mut state else {
-            unreachable!()
-        };
-        working.running.plain_list.insert(
+        state.running.plain_list.insert(
             token,
             PlainListViewState {
                 hint: Some(expenses[10].id),
@@ -727,10 +747,10 @@ mod tests {
         };
         assert_ne!(before, with_hint);
 
-        let State::Working(working) = &mut state else {
+        let AppState::Working(model) = &mut state.app else {
             unreachable!()
         };
-        working.model.movements.update_with(|_| {});
+        model.movements.update_with(|_| {});
         let Comparable(with_bump) = PlainListTransformer::comparable(&state, token) else {
             panic!("Should be comparable")
         };

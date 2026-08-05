@@ -1,5 +1,5 @@
 use std::assert_matches;
-use monilib::{LibClockSource, LibConfig, MoniErrorType, MoniLib, MoniLogLevel};
+use monilib::{LibClockSource, LibConfig, LibErrorCause, MoniErrorType, MoniLib, MoniLogLevel};
 use std::fs;
 use std::path::PathBuf;
 use std::thread;
@@ -35,6 +35,28 @@ fn unreadable_state_should_not_crash_library() {
         .expect("corrupted state file should not error library");
 
     wait();
+
+    assert!(!lib.has_finished());
+}
+
+#[test]
+fn unreadable_state_should_report_error_as_view() {
+    let path = tmp_dir();
+    fs::write(path.join("state.json"), "{unreadable model}")
+        .expect("state file should be writable");
+
+    let lib = MoniLib::new(path.display().to_string(), config())
+        .expect("corrupted state file should not error library");
+    let errors_out = lib.errors();
+
+
+    wait();
+    let Some(errors) = errors_out.pop_event() else {
+        panic!("Library should have reported back some error on its output")
+    };
+
+    assert_eq!(errors.len(), 1, "Only failed state error should be produced");
+    assert_matches!(errors.first().unwrap().error_type, Lib(LibErrorCause::StateLoad(_)));
 
     assert!(!lib.has_finished());
 }

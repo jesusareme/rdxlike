@@ -1,15 +1,17 @@
-use std::fmt::Debug;
 use super::{cmd::*, *};
+use crate::LibErrorCause;
+use crate::runtime::Dirty::Statistics;
 use crate::runtime::model_views::ClockedModelStateView;
 use crate::{
     action::{Action, WorkingAction},
-    runtime::{State::Zero, cmd::DebounceAction::Cancel},
+    runtime::cmd::DebounceAction::Cancel,
 };
-use std::mem;
 use rdxlib::cmd::Cmd::Direct;
+use std::fmt::Debug;
+use std::mem;
 use tracing::error;
-use crate::LibErrorCause;
-use crate::runtime::Dirty::Statistics;
+use crate::action::WorkingAction::{Model, Save, SuccessfulSave, Watchdog, WatchdogWatching};
+use crate::runtime::cmd::DebounceCmd::DelayedSave;
 
 pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
     use Action::*;
@@ -26,13 +28,8 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                 Err(error) => return failed_init(state, error),
             };
 
-            let working = State::Working(WorkingState {
-                model,
-                running: RunningState::default(),
-            });
-
-            match mem::replace(state, working) {
-                Zero(pending) => {
+            match mem::replace(&mut state.app, AppState::Working(model)) {
+                AppState::Zero(pending) => {
                     let pending: Vec<Action> = pending.into_iter().map(Into::into).collect();
                     MoniProducts::cmd(Direct(pending))
                 }
@@ -41,76 +38,78 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
         }
         NoOp => MoniProducts::none(),
 
-        Working(action) => match state {
-            Zero(pending) => {
+        Running(action) => reducer_running(&mut state.running, action),
+
+        Working(action) => match &mut state.app {
+            AppState::Zero(pending) => {
                 pending.push(action);
                 MoniProducts::none()
             }
-            State::Failed(_) => MoniProducts::none(),
-            State::Working(working) => reducer_working(working, action),
+            AppState::Failed => {
+                MoniProducts::none()
+                //todo!
+            }
+            AppState::Working(model) => {
+                match action {
+                    Save => MoniProducts::cmds(vec![
+                        PersistenceCmd::Save(model.clone()).into(),
+                        DelayedSave(Cancel).into(),
+                    ]),
+                    SuccessfulSave => {
+                        debug!("Successful SAVE!");
+                        MoniProducts::none()
+                    }
+
+                    Watchdog => MoniProducts::cmd(TimeSubscriptionCmd::Watchdog),
+
+                    Model(action) => reducer_model(ClockedModelStateView::new(model, &mut state.running), action),
+
+                    WatchdogWatching => {
+                        debug!("watchdog watching!");
+                        MoniProducts::none()
+                    }
+                    // Action::DelayedSave => {
+                    //
+                    // }
+
+                    // Action::AddToInfo(text) => Products::none(),
+                    // Action::AddFromLongCalculation => {
+                    // 	let counter = state.counter.clone(); // we can move values for later use
+                    // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
+                    // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
+                    // }
+                    // Action::AddEverySecond(interval) => {
+                    // 	let operation = DropCancellation::new(Uuid::new_v4());
+                    // 	let handle = operation.cancellation_handle();
+                    // 	state.counting = Some(operation);
+                    //
+                    // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
+                    // 		interval,
+                    // 		handle,
+                    // 	}));
+                    // 	Products::cmd(cmd)
+                    // }
+                    // Action::AddFromAsync => {
+                    // 	let counter = state.counter;
+                    // 	let cmd = Cmd::Async(Box::new(move || {
+                    // 		thread::sleep(Duration::from_secs(1));
+                    // 		Action::Add(counter * 2)
+                    // 	}));
+                    // 	Products::cmd(cmd)
+                    // }
+                }
+            },
         },
+
     }
 }
 
 fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
     let error = MoniError::from(LibErrorCause::StateLoad(format!("{cause:?}")));
     error!("MoniLib was unable to initialize: {error}");
-    *state = State::Failed(error);
+    state.running.errors.push(error);
+    state.app = AppState::Failed;
     MoniProducts::none()
-}
-
-fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> MoniProducts {
-    use DebounceCmd::*;
-    use WorkingAction::*;
-    match action {
-        Save => MoniProducts::cmds(vec![
-            PersistenceCmd::Save(state.model.clone()).into(),
-            DelayedSave(Cancel).into(),
-        ]),
-        SuccessfulSave => {
-            debug!("Successful SAVE!");
-            MoniProducts::none()
-        }
-
-        Watchdog => MoniProducts::cmd(TimeSubscriptionCmd::Watchdog),
-
-        Model(action) => reducer_model(state.model_view(), action),
-        Running(action) => reducer_running(&mut state.running, action),
-
-        WatchdogWatching => {
-            debug!("watchdog watching!");
-            MoniProducts::none()
-        }
-        // Action::DelayedSave => {
-        //
-        // }
-
-        // Action::AddToInfo(text) => Products::none(),
-        // Action::AddFromLongCalculation => {
-        // 	let counter = state.counter.clone(); // we can move values for later use
-        // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
-        // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
-        // }
-        // Action::AddEverySecond(interval) => {
-        // 	let operation = DropCancellation::new(Uuid::new_v4());
-        // 	let handle = operation.cancellation_handle();
-        // 	state.counting = Some(operation);
-        //
-        // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
-        // 		interval,
-        // 		handle,
-        // 	}));
-        // 	Products::cmd(cmd)
-        // }
-        // Action::AddFromAsync => {
-        // 	let counter = state.counter;
-        // 	let cmd = Cmd::Async(Box::new(move || {
-        // 		thread::sleep(Duration::from_secs(1));
-        // 		Action::Add(counter * 2)
-        // 	}));
-        // 	Products::cmd(cmd)
-        // }
-    }
 }
 
 fn reducer_running(state: &mut RunningState, action: RunningAction) -> MoniProducts {
@@ -272,21 +271,21 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
 mod reducer_model_test {
     use super::*;
     use crate::MoniErrorType;
+    use crate::runtime::ExpenseCategory::*;
+    use crate::runtime::cmd::DebounceAction::Bump;
+    use crate::runtime::cmd::DebounceCmd::DelayedSave;
+    use crate::runtime::cmd::ServiceCommand::Subscribe;
+    use crate::runtime::cmd::Subscription::Debounce;
     use crate::testing::{contemporary_ref_date, ordered_by_index_map};
     use itertools::Itertools;
     use jiff::{Span, ToSpan};
     use proptest::prelude::*;
     use proptest::{prop_compose, proptest};
+    use rdxlib::cmd::Cmd::Env;
     use rstest::rstest;
     use std::str::FromStr;
-    use std::time::{SystemTime};
+    use std::time::SystemTime;
     use uuid::Uuid;
-    use rdxlib::cmd::Cmd::Env;
-    use crate::runtime::cmd::DebounceAction::Bump;
-    use crate::runtime::cmd::DebounceCmd::DelayedSave;
-    use crate::runtime::cmd::ServiceCommand::Subscribe;
-    use crate::runtime::cmd::Subscription::Debounce;
-    use crate::runtime::ExpenseCategory::*;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();

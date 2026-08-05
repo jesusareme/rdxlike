@@ -8,7 +8,7 @@ mod util;
 mod testing;
 pub mod error;
 
-use crate::error::{LibErrorCause, MoniDomainError, MoniError, MoniErrorType};
+pub use crate::error::{LibErrorCause, MoniDomainError, MoniError, MoniErrorType};
 use crate::inout::MoniStatistics;
 use crate::runtime::{MoniMessage, RuntimeEnvironment};
 use crate::util::ExpenseId;
@@ -133,7 +133,8 @@ impl MoniLib {
             let config = RuntimeEnvironment {
                 messages_rx: message_rx,
                 actions_tx,
-                logging_enabled: true,
+                logging_enabled_pre_action: true,
+                logging_enabled_post_action: true,
                 path,
                 clock: shared_clock,
             };

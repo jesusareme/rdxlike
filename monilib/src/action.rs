@@ -17,6 +17,7 @@ pub enum Action {
     Init,
     InitResult(Result<Option<String>, PersistenceError>),
     Working(WorkingAction),
+    Running(RunningAction),
 }
 
 impl From<Action> for Message<Action, LibAction> {
@@ -28,7 +29,6 @@ impl From<Action> for Message<Action, LibAction> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkingAction {
     Model(ModelAction),
-    Running(RunningAction),
     Save,
 
     Watchdog,
@@ -72,21 +72,15 @@ impl From<ModelAction> for WorkingAction {
     }
 }
 
-impl From<RunningAction> for WorkingAction {
+impl From<RunningAction> for Action {
     fn from(a: RunningAction) -> Self {
-        WorkingAction::Running(a)
+        Action::Running(a)
     }
 }
 
 impl From<LibAction> for MoniMessage {
     fn from(value: LibAction) -> Self {
         Message::Runtime(value)
-    }
-}
-
-impl From<RunningAction> for Action {
-    fn from(a: RunningAction) -> Self {
-        WorkingAction::from(a).into()
     }
 }
 

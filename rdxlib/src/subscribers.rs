@@ -77,7 +77,8 @@ pub trait ViewTransformer<C: Client>: Send + 'static {
 	fn comparable(state: &C::State, token: ViewId) -> ComparableResult<Self::ComparableValue>;
 
 	/// Extracts the minimum thread-safe slice from the original state needed to calculate the
-	/// final information the view needs.
+	/// final information the view needs. It returns `SubscriberError` if was unable to create the
+	/// state slice.
 	fn slice(state: &C::State, token: ViewId) -> Result<Self::Slice, SubscriberError>;
 
 	/// Derives the final data needed by the view. This method is executed on its own
@@ -101,12 +102,11 @@ pub struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT
 }
 
 impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubscriber<C, VT, VO> {
-	pub fn new(id: ViewId, transformer: VT, output: VO) -> Result<Self, InitError> {
+	pub fn new(id: ViewId, mut transformer: VT, output: VO) -> Result<Self, InitError> {
 		let (sender, receiver) = mpsc::channel::<Option<VT::Slice>>();
 		let builder = thread::Builder::new().name(id.to_string());
 		let output_clone = output.clone();
 		let thread_handle = builder.spawn(move || {
-			let mut transformer = transformer;
 			while let Some(slice) = receiver.recv().unwrap() {
 				if output_clone.is_active() {
 					if let Some(product) = transformer.derive(slice) {

@@ -74,7 +74,8 @@ pub enum Dirty {
 pub struct RuntimeEnvironment {
     pub messages_rx: Receiver<MoniMessage>,
     pub actions_tx: MessageSender<MoniMessage>,
-    pub logging_enabled: bool,
+    pub logging_enabled_pre_action: bool,
+    pub logging_enabled_post_action: bool,
     pub path: String,
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
@@ -83,13 +84,13 @@ pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniErr
     let environment = Services::new(&config.actions_tx, config.path, &config.clock)?;
 
     let mut funs = vec![];
-    if config.logging_enabled {
-        funs.push(MoniMiddleware::Logger);
-    }
+    funs.push(MoniMiddleware::Logger {
+        prev: config.logging_enabled_pre_action,
+        post: config.logging_enabled_post_action
+    });
     funs.push(MoniMiddleware::Clock(config.clock));
-    funs.push(MoniMiddleware::Cleaner);
 
-    let state = State::Zero(vec![]);
+    let state = State::default();
 
     config.actions_tx.send_message(Init)?;
 
@@ -139,24 +140,41 @@ fn unstarted_subscriber(name: &str, cause: InitError) -> RuntimeProducts<MoniLib
 }
 
 #[derive(Debug)]
-pub(crate) enum State {
+pub(crate) enum AppState {
     Zero(Vec<WorkingAction>),
-    Failed(MoniError),
-    Working(WorkingState),
+    Failed,
+    Working(ModelState),
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        AppState::Zero(vec![])
+    }
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct WorkingState {
-    model: ModelState,
+pub(crate) struct State {
+    app: AppState,
     running: RunningState,
 }
 
-impl WorkingState {
-    fn model_view(&mut self) -> ClockedModelStateView<'_> {
-        ClockedModelStateView {
-            model_state: &mut self.model,
-            time: &self.running.time,
-            errors: &mut self.running.errors,
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
+pub struct ModelState {
+    model_version: u16,
+    counter: u32,
+    info: String,
+    movements: VersionedArc<Vec<Expense>>,
+    statistics_all: Option<Statistics>,
+}
+
+impl Default for ModelState {
+    fn default() -> Self {
+        ModelState {
+            model_version: MODEL_VERSION,
+            counter: 0,
+            info: String::new(),
+            movements: VersionedArc::from(vec![]),
+            statistics_all: None,
         }
     }
 }
@@ -260,27 +278,6 @@ pub struct StatisticsResults {
     pub sum: i64,
     pub max_expense: i64,
     pub min_expense: i64,
-}
-
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
-pub struct ModelState {
-    model_version: u16,
-    counter: u32,
-    info: String,
-    movements: VersionedArc<Vec<Expense>>,
-    statistics_all: Option<Statistics>,
-}
-
-impl Default for ModelState {
-    fn default() -> Self {
-        ModelState {
-            model_version: MODEL_VERSION,
-            counter: 0,
-            info: String::new(),
-            movements: VersionedArc::from(vec![]),
-            statistics_all: None,
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

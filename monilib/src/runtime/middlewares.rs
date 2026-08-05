@@ -1,4 +1,4 @@
-use super::{MoniProducts, MoniLibClient, State, WorkingState};
+use super::{MoniProducts, MoniLibClient, State};
 use crate::action::Action;
 use crate::util::ClockSource;
 use rdxlib::middleware::{ChainableMiddleware, Next};
@@ -6,9 +6,8 @@ use std::sync::Arc;
 use tracing::debug;
 
 pub enum MoniMiddleware {
-    Logger,
+    Logger { prev: bool, post: bool},
     Clock(Arc<dyn ClockSource>),
-    Cleaner,
 }
 
 impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
@@ -20,27 +19,19 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
     ) -> MoniProducts {
         use MoniMiddleware::*;
         match self {
-            Logger => {
-                // if let State::Working(working) = &state {
-                //     debug!("initial state before <{:?}> is {:?}", action, working.model);
-                // }
+            Logger {prev, post} => {
+                if *prev {
+                    debug!("initial state before <{:?}> is {:?}", action, state);
+                }
                 debug!("receiving action {action:?}");
                 let products = next.run(state, action);
-                // if let State::Working(working) = &state {
-                //     debug!("ending state is {:?}", working.model);
-                // }
+                if *post {
+                    debug!("ending state is {:?}", state);
+                }
                 products
             }
             Clock(source) => {
-                if let State::Working(WorkingState { model: _, running }) = state {
-                    running.time = source.now_civil();
-                }
-                next.run(state, action)
-            }
-            Cleaner => {
-                if let State::Working(working) = state {
-                    working.running.errors.clear();
-                }
+                state.running.time = source.now_civil();
                 next.run(state, action)
             }
         }
