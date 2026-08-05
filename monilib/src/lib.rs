@@ -194,10 +194,10 @@ impl MoniLib {
         Ok(())
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<(), MoniError>{
         self.action_sender
-            .send_message(WorkingAction::Save)
-            .unwrap();
+            .send_message(WorkingAction::Save)?;
+        Ok(())
     }
 
     #[ffi_stream(item = Vec<MoniError>)]
@@ -222,10 +222,10 @@ impl MoniLib {
         out.into()
     }
 
-    pub fn watchdog(&self) {
+    pub fn watchdog(&self) -> Result<(), MoniError> {
         self.action_sender
-            .send_message(WorkingAction::Watchdog)
-            .unwrap();
+            .send_message(WorkingAction::Watchdog)?;
+        Ok(())
     }
 
     pub fn has_finished(&self) -> bool {

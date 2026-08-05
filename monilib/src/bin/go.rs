@@ -1,8 +1,9 @@
 use monilib::{ExpenseCategory, LibClockSource, LibConfig, MoniExpense, MoniLib, MoniLogLevel};
 use rand::random;
 use std::{thread, time::Duration};
+use std::error::Error;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");
     let tmp = "/var/tmp";
 
@@ -11,7 +12,7 @@ fn main() {
         clock: LibClockSource::System,
     };
 
-    let lib = MoniLib::new(tmp.to_string(), config).unwrap();
+    let lib = MoniLib::new(tmp.to_string(), config)?;
     // lib.save();
 
     lib.add_expense(MoniExpense {
@@ -19,8 +20,7 @@ fn main() {
         amount: random(),
         comment: Some("go.rs1".to_string()),
         category: ExpenseCategory::Essential,
-    })
-    .expect("error!");
+    })?;
 
     thread::sleep(Duration::from_secs(2));
 
@@ -29,8 +29,9 @@ fn main() {
         amount: random(),
         comment: Some("go.rs2".to_string()),
         category: ExpenseCategory::Essential,
-    })
-    .expect("error!");
+    })?;
 
     thread::sleep(Duration::from_secs(6));
+
+    Ok(())
 }
