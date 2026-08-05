@@ -2,7 +2,6 @@ use crate::runtime::Expense;
 use crate::util::{ClockSource, ExpenseId, IdSource};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
-use std::cell::Cell;
 use std::str::FromStr;
 use std::time::Instant;
 use uuid::Uuid;
@@ -54,8 +53,36 @@ impl ClockSource for StuckClock {
 
     fn now_instant(&self) -> Instant {
         panic!(
-            "StuckClock not meant to be used for instant time, use FakeClock for more complete control"
+            "StuckClock not meant to be used for instant time"
         )
+    }
+}
+
+impl Default for StuckClock {
+    fn default() -> Self {
+        StuckClock { stuck_at: contemporary_ref_date() }
+    }
+}
+
+pub struct StuckInstantClock {
+    pub stuck_at: Instant,
+}
+
+impl ClockSource for StuckInstantClock {
+    fn now_civil(&self) -> Zoned {
+        panic!(
+            "StuckInstantClock not meant to be used for civil time"
+        )
+    }
+
+    fn now_instant(&self) -> Instant {
+        self.stuck_at
+    }
+}
+
+impl Default for StuckInstantClock {
+    fn default() -> Self {
+        StuckInstantClock { stuck_at: Instant::now() }
     }
 }
 
@@ -66,33 +93,5 @@ pub struct FixedIdSource {
 impl IdSource for FixedIdSource {
     fn new_expense_id(&self, _at: Timestamp) -> ExpenseId {
         self.id
-    }
-}
-
-pub struct FakeClock {
-    civil_count: Cell<u32>,
-    instant: Cell<Instant>,
-    instant_count: Cell<u32>,
-}
-
-impl ClockSource for FakeClock {
-    fn now_civil(&self) -> Zoned {
-        self.civil_count.set(self.civil_count.get() + 1);
-        contemporary_ref_date()
-    }
-
-    fn now_instant(&self) -> Instant {
-        self.instant_count.update(|instant| instant + 1);
-        self.instant.get()
-    }
-}
-
-impl Default for FakeClock {
-    fn default() -> Self {
-        FakeClock {
-            civil_count: Cell::new(0),
-            instant: Cell::new(Instant::now()),
-            instant_count: Cell::new(0),
-        }
     }
 }

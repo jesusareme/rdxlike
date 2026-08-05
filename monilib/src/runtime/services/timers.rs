@@ -237,7 +237,7 @@ impl From<DebounceCmd> for TimerTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::FakeClock;
+    use crate::testing::StuckInstantClock;
     use rstest::{fixture, rstest};
 
     impl Default for TimerBehavior {
@@ -251,8 +251,8 @@ mod tests {
     }
 
     #[fixture]
-    fn clock() -> FakeClock {
-        FakeClock::default()
+    fn clock() -> StuckInstantClock {
+        StuckInstantClock::default()
     }
 
     fn debounce_task() -> TimerTask {
@@ -294,7 +294,7 @@ mod tests {
     #[case::debounce(debounce_task(), TimerType::Debounce)]
     #[case::repeat(repeat_task(), TimerType::Repeat(Some(NonZeroU64::new(2).unwrap())))]
     fn timer_initial_state(
-        clock: FakeClock,
+        clock: StuckInstantClock,
         #[case] task: TimerTask,
         #[case] expected_type: TimerType,
     ) {
@@ -310,7 +310,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_debounce_type_bump_state_changed(clock: FakeClock) {
+    fn timer_debounce_type_bump_state_changed(clock: StuckInstantClock) {
         let mut timer = debounce_timer(clock.now_instant());
         let expected_final_state = TimerState {
             count: 1,
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_type_bump_state_changed(clock: FakeClock) {
+    fn timer_repeat_type_bump_state_changed(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant() + Duration::from_nanos(1));
         timer.state = TimerState {
             count: 42,
@@ -341,13 +341,13 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_debounce_not_repeatable(clock: FakeClock) {
+    fn timer_debounce_not_repeatable(clock: StuckInstantClock) {
         let timer = debounce_timer(clock.now_instant());
         assert!(timer.repeatable().is_none());
     }
 
     #[rstest]
-    fn timer_repeat_not_drained_repetitions_gets_repeatable(clock: FakeClock) {
+    fn timer_repeat_not_drained_repetitions_gets_repeatable(clock: StuckInstantClock) {
         let timer = repeat_timer(clock.now_instant());
         let expected_final_state = TimerState {
             count: 1,
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_get_next_duration_correctly_called(clock: FakeClock) {
+    fn timer_repeat_get_next_duration_correctly_called(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
         timer.behavior.get_next_duration = |_| Duration::from_secs(42);
         let expected_final_state = TimerState {
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_action_outcome_correctly_called_according_to_state(clock: FakeClock) {
+    fn timer_repeat_action_outcome_correctly_called_according_to_state(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
         timer.behavior.outcome = |repeat| {
             if repeat % 2 == 0 {
@@ -396,7 +396,7 @@ mod tests {
     #[case(u64::MAX - 1, u64::MAX)]
     #[case::saturates_at_max(u64::MAX, u64::MAX)]
     fn timer_repeat_infinite_is_always_repeatable(
-        clock: FakeClock,
+        clock: StuckInstantClock,
         #[case] start_count: u64,
         #[case] expected_count: u64,
     ) {
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_drained_repetitions_non_repeatable(clock: FakeClock) {
+    fn timer_repeat_drained_repetitions_non_repeatable(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1; // we are on second repetition
 
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_one_gets_one(clock: FakeClock) {
+    fn next_deadline_one_gets_one(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::Watchdog, repeat_timer(clock.now_instant()));
 
@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_in_past_gets_one(clock: FakeClock) {
+    fn next_deadline_in_past_gets_one(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let past_deadline = clock.now_instant() - Duration::from_nanos(1);
         let timer = repeat_timer(past_deadline);
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_multiple_timers_gets_next(clock: FakeClock) {
+    fn next_deadline_multiple_timers_gets_next(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let timer1 = repeat_timer(clock.now_instant() + Duration::from_secs(9));
         tasks.insert(TimerId::Watchdog, timer1);
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_multiple_timers_same_deadline_gets_next(clock: FakeClock) {
+    fn next_deadline_multiple_timers_same_deadline_gets_next(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let deadline = clock.now_instant() + Duration::from_secs(9);
         let timer1 = repeat_timer(deadline);
@@ -476,7 +476,7 @@ mod tests {
     #[case::debounce(debounce_task(), TimerId::DebounceSave)]
     #[case::repeat(repeat_task(), TimerId::Watchdog)]
     fn timers_initial_bump_creates_task_and_schedule(
-        clock: FakeClock,
+        clock: StuckInstantClock,
         #[case] task: TimerTask,
         #[case] expected_id: TimerId,
     ) {
@@ -497,7 +497,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_passed_creates_action_and_removed(clock: FakeClock) {
+    fn timers_debounce_task_mode_deadline_passed_creates_action_and_removed(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::DebounceSave, debounce_timer(clock.now_instant()));
 
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_not_passed_no_action_state_not_updated(clock: FakeClock) {
+    fn timers_debounce_task_mode_deadline_not_passed_no_action_state_not_updated(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(
             TimerId::DebounceSave,
@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_jumped_no_action_state_updated(clock: FakeClock) {
+    fn timers_debounce_task_mode_deadline_jumped_no_action_state_updated(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::DebounceSave, debounce_timer(clock.now_instant()));
         let final_state = TimerState {
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_mode_cancel_gets_cancelled_no_action(clock: FakeClock) {
+    fn timers_debounce_mode_cancel_gets_cancelled_no_action(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let timer = debounce_timer(clock.now_instant());
         tasks.insert(TimerId::DebounceSave, timer);
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_successive_bump_resets_state(clock: FakeClock) {
+    fn timers_repeat_mode_successive_bump_resets_state(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1;
@@ -590,7 +590,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_deadline_passed_gets_action_re_scheduled(clock: FakeClock) {
+    fn timers_repeat_mode_deadline_passed_gets_action_re_scheduled(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::Watchdog, repeat_timer(clock.now_instant()));
         let expected_final_state = TimerState {
@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_last_repeat_gets_action_no_rescheduling(clock: FakeClock) {
+    fn timers_repeat_mode_last_repeat_gets_action_no_rescheduling(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1;
@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_cancel_gets_cancelled(clock: FakeClock) {
+    fn timers_repeat_mode_cancel_gets_cancelled(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let timer = repeat_timer(clock.now_instant());
         tasks.insert(TimerId::Watchdog, timer);

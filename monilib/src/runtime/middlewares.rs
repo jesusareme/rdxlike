@@ -37,141 +37,122 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
         }
     }
 }
-/*
-todo!
+
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use super::*;
     use crate::action::Action::NoOp;
     use crate::action::WorkingAction;
-    use crate::runtime::Dirty;
-    use crate::runtime::State::Working;
-    use crate::runtime::cmd::Cmd::Subscribe;
+    use crate::runtime::cmd::DebounceAction::Bump;
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
-    use crate::runtime::cmd::Subscription::Debounce;
-    use crate::runtime::cmd::{Cmd, DebounceAction};
-    use crate::testing::{FakeClock, contemporary_ref_date};
-    use crate::MoniDomainError;
-    use uuid::Uuid;
+    use crate::runtime::cmd::DelayedSaveProduct;
+    use crate::runtime::{AppState, Dirty, ModelState};
+    use crate::testing::{contemporary_ref_date, StuckClock};
+    use jiff::Zoned;
+    use rdxlib::cmd::Cmd;
+    use rdxlib::middleware::MiddlewareStore;
+    use rstest::rstest;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
-    struct FakeNext<'a> {
-        called: &'a mut u8,
+    fn next_products() -> MoniProducts {
+        MoniProducts::cmd(Cmd::Direct(vec![WorkingAction::WatchdogWatching.into()]))
+            .with_dirty(Dirty::FinancesCurrentMonth | Dirty::Categories)
+            .with_delayed_save()
     }
-    impl NextChainable for FakeNext<'_> {
-        fn run(&mut self, _state: &mut State, _action: Action) -> Products {
-            *self.called += 1;
-            Products::cmd(Cmd::Direct(vec![WorkingAction::WatchdogWatching]))
-                .with_dirty(Dirty::FinancesCurrentMonth | Dirty::Categories)
-                .with_delayed_save()
+
+    fn assert_products(products: MoniProducts) {
+        assert_eq!(
+            products.cmds,
+            vec![
+                Cmd::Direct(vec![WorkingAction::WatchdogWatching.into()]),
+                DelayedSave(Bump).into(),
+            ]
+        );
+        assert_eq!(
+            products.dirty,
+            Dirty::FinancesCurrentMonth | Dirty::Categories
+        );
+    }
+
+    fn fake_reducer(_: &mut State, action: Action) -> MoniProducts {
+        assert!(matches!(action, NoOp));
+        next_products()
+    }
+
+    fn stuck_clock() -> MoniMiddleware {
+        MoniMiddleware::Clock(Arc::new(StuckClock::default()))
+    }
+
+    struct FakeNext {
+        pub calls: Rc<Cell<u8>>,
+        pub expected_time: Option<Zoned>,
+    }
+
+    impl FakeNext {
+        fn new() -> Self {
+            FakeNext {
+                calls: Rc::new(Cell::new(0)),
+                expected_time: None,
+            }
         }
     }
 
-    struct FakeNextChainableClockTester;
-    impl NextChainable for FakeNextChainableClockTester {
-        fn run(&mut self, state: &mut State, action: Action) -> Products {
-            let Working(WorkingState { model: _, running }) = state else {
-                panic!("wrong final state")
-            };
-            assert_eq!(running.time, contemporary_ref_date());
+    impl ChainableMiddleware<MoniLibClient> for FakeNext {
+        fn execute(
+            &mut self,
+            state: &mut State,
+            action: Action,
+            mut next: Next<MoniLibClient>,
+        ) -> MoniProducts {
+            self.calls.update(|calls| calls + 1);
             assert!(matches!(action, NoOp));
-            Products::cmd(Cmd::Direct(vec![WorkingAction::WatchdogWatching]))
-                .with_dirty(Dirty::FinancesCurrentMonth | Dirty::Categories)
-                .with_delayed_save()
+            if let Some(expected) = &self.expected_time {
+                assert_eq!(&state.running.time, expected);
+            }
+            next.run(state, action)
         }
     }
 
-    struct FakeNextChainableCleanerTester;
-    impl NextChainable for FakeNextChainableCleanerTester {
-        fn run(&mut self, state: &mut State, action: Action) -> Products {
-            let Working(WorkingState { model: _, running }) = state else {
-                panic!("wrong final state")
-            };
-            assert!(running.errors.is_empty());
-            assert!(matches!(action, NoOp));
-            Products::cmd(Cmd::Direct(vec![WorkingAction::WatchdogWatching]))
-                .with_dirty(Dirty::FinancesCurrentMonth | Dirty::Categories)
-                .with_delayed_save()
-        }
+    fn chain(middleware: MoniMiddleware, next: FakeNext) -> MiddlewareStore<MoniLibClient> {
+        MiddlewareStore::new(vec![middleware.boxed(), Box::new(next)], fake_reducer)
     }
 
     #[rstest]
-    #[allow(clippy::arc_with_non_send_sync)]
-    #[case(ChainableMiddleware::Clock(Arc::new(FakeClock::default())))]
-    #[case(ChainableMiddleware::Logger)]
-    #[case(ChainableMiddleware::Cleaner)]
-    fn middleware_should_call_next_and_sink_products(#[case] mut middleware: MoniMiddleware) {
-        let working_state = WorkingState::default();
-        let mut state = Working(working_state);
+    #[case::clock(stuck_clock())]
+    #[case::logger(MoniMiddleware::Logger { prev: true, post: true })]
+    fn middleware_should_call_next_and_sink_products(#[case] middleware: MoniMiddleware) {
+        let next = FakeNext::new();
+        let calls = next.calls.clone();
+        let mut store = chain(middleware, next);
+        let mut state = State::default();
 
-        let mut count = 0;
-        let next_in_chain = FakeNext { called: &mut count };
+        let products = store.run(&mut state, NoOp);
 
-        let products = middleware.execute(&mut state, NoOp, next_in_chain);
-
-        assert_eq!(
-            products.cmds,
-            vec![
-                Cmd::Direct(vec![WorkingAction::WatchdogWatching]),
-                Subscribe(Debounce(DelayedSave(DebounceAction::Bump)))
-            ]
-        );
-        assert_eq!(
-            products.dirty,
-            Dirty::FinancesCurrentMonth | Dirty::Categories
-        );
-        assert_eq!(count, 1);
+        assert_products(products);
+        assert_eq!(calls.get(), 1);
     }
 
-    #[test]
-    #[allow(clippy::arc_with_non_send_sync)]
-    fn clock_middleware_correct_state() {
-        let mut middleware = MoniMiddleware::Clock(Arc::new(FakeClock::default()));
-        let working_state = WorkingState::default();
-        let mut state = Working(working_state);
+    #[rstest]
+    #[case::zero(AppState::Zero(vec![]))]
+    #[case::failed(AppState::Failed)]
+    #[case::working(AppState::Working(ModelState::default()))]
+    fn clock_middleware_sets_time_before_next_runs(#[case] app: AppState) {
+        let mut next = FakeNext::new();
+        next.expected_time = Some(contemporary_ref_date());
+        let calls = next.calls.clone();
+        let mut store = chain(stuck_clock(), next);
+        let mut state = State {
+            app,
+            ..State::default()
+        };
+        assert_ne!(state.running.time, contemporary_ref_date());
 
-        let next_in_chain = FakeNextChainableClockTester;
+        let products = store.run(&mut state, NoOp);
 
-        let products = middleware.execute(&mut state, NoOp, next_in_chain);
-
-        assert_eq!(
-            products.cmds,
-            vec![
-                Cmd::Direct(vec![WorkingAction::WatchdogWatching]),
-                Subscribe(Debounce(DelayedSave(DebounceAction::Bump)))
-            ]
-        );
-        assert_eq!(
-            products.dirty,
-            Dirty::FinancesCurrentMonth | Dirty::Categories
-        );
-    }
-
-    #[test]
-    fn cleaner_middleware_correct_state() {
-        let mut middleware = MoniMiddleware::Cleaner;
-        let mut working_state = WorkingState::default();
-        working_state
-            .running
-            .errors
-            .push(MoniDomainError::ExpenseNotFound(Uuid::new_v4()).into());
-        let mut state = Working(working_state);
-
-        let next_in_chain = FakeNextChainableCleanerTester;
-
-        let products = middleware.execute(&mut state, NoOp, next_in_chain);
-
-        assert_eq!(
-            products.cmds,
-            vec![
-                Cmd::Direct(vec![WorkingAction::WatchdogWatching]),
-                Subscribe(Debounce(DelayedSave(DebounceAction::Bump)))
-            ]
-        );
-        assert_eq!(
-            products.dirty,
-            Dirty::FinancesCurrentMonth | Dirty::Categories
-        );
+        assert_products(products);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(state.running.time, contemporary_ref_date());
     }
 }
-*/
+
