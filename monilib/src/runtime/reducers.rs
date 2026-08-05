@@ -109,7 +109,10 @@ fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
     let error = MoniError::from(LibErrorCause::StateLoad(format!("{cause:?}")));
     error!("MoniLib was unable to initialize: {error}");
     state.running.errors.push(error);
-    state.app = AppState::Failed;
+    if let AppState::Zero(actions) = mem::replace(&mut state.app, AppState::Failed) {
+        error!("These pending actions received while initializing store will be discarded: {:?}", actions)
+    }
+
     MoniProducts::none()
 }
 
