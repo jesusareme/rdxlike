@@ -1,4 +1,5 @@
 pub mod cmd;
+pub mod error;
 pub mod messages;
 pub mod middleware;
 pub mod products;

@@ -16,6 +16,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 use tracing::{debug, error};
+use crate::MoniError;
 
 pub struct Services {
     pub persistence: PersistenceService,
@@ -27,12 +28,12 @@ impl Services {
         actions_sender: &impl MessageSend<Message = MoniMessage>,
         base_path: impl AsRef<Path>,
         clock: &Arc<dyn ClockSource + Send + Sync>,
-    ) -> Self {
+    ) -> Result<Self, MoniError> {
         let persistence_core = PersistenceServiceApi::new(base_path);
-        Services {
-            persistence: PersistenceService::new(actions_sender, persistence_core),
-            timers: Timers::new(actions_sender, clock),
-        }
+        Ok(Services {
+            persistence: PersistenceService::new(actions_sender, persistence_core)?,
+            timers: Timers::new(actions_sender, clock)?,
+        })
     }
 }
 
@@ -111,11 +112,11 @@ impl PersistenceService {
     pub fn new(
         action_sender: &impl MessageSend<Message = MoniMessage>,
         context: impl PersistenceApi + Send + 'static,
-    ) -> Self {
+    ) -> Result<Self, MoniError> {
         let (sender, receiver) = mpsc::channel::<Option<PersistenceCmd>>();
         let action_sender = action_sender.clone();
         let builder = thread::Builder::new().name("PersistenceService.thread".to_string());
-        let handle = builder.spawn(move || {
+        let thread_handle = builder.spawn(move || {
             debug!("PersistenceService started");
             while let Some(to_execute) = receiver.recv().unwrap() {
                 let action = Self::chooser(to_execute, &context);
@@ -124,13 +125,17 @@ impl PersistenceService {
                     break;
                 }
             }
-            debug!("BasicService ended");
-        });
+            debug!("PersistenceService ended");
+        })?;
 
-        PersistenceService {
+        Ok(PersistenceService {
             service_sender: sender,
-            thread_handle: handle.unwrap(),
-        }
+            thread_handle,
+        })
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.thread_handle.is_finished()
     }
 }
 

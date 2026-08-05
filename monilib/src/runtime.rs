@@ -27,7 +27,8 @@ use crate::action::LibAction::StatisticsSubscription;
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
 pub use services::PersistenceError;
-use tracing::debug;
+use rdxlib::error::InitError;
+use tracing::{debug, error};
 
 use crate::runtime::cmd::ServiceCommand;
 use crate::runtime::middlewares::MoniMiddleware;
@@ -78,8 +79,8 @@ pub struct RuntimeEnvironment {
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
-    let environment = Services::new(&config.actions_tx, config.path, &config.clock);
+pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniError> {
+    let environment = Services::new(&config.actions_tx, config.path, &config.clock)?;
 
     let mut funs = vec![];
     if config.logging_enabled {
@@ -90,10 +91,7 @@ pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
 
     let state = State::Zero(vec![]);
 
-    config
-        .actions_tx
-        .send_message(Init)
-        .expect("Unable to prepare init of MoniLib");
+    config.actions_tx.send_message(Init)?;
 
     let runtime_cfg = RuntimeConfig {
         services: environment,
@@ -101,39 +99,49 @@ pub fn new(config: RuntimeEnvironment) -> Runtime<MoniLibClient> {
         middlewares: funs.into_iter().map(MoniMiddleware::boxed).collect(),
         reducer,
         runtime_reducer,
-        jobs_dispatcher: ThreadPool::new(8),
+        jobs_dispatcher: ThreadPool::new(8)?,
         messages_rx: config.messages_rx,
         messages_tx: config.actions_tx,
     };
 
     debug!("MoniLib ready to run...");
 
-    Runtime::new(runtime_cfg)
+    Ok(Runtime::new(runtime_cfg))
 }
 
 fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
     match lib_message {
         PlainListViewSubscription(token, out) => {
-            let new_subscription = subscribers::plain_list_view_subscriber(token, out);
-            RuntimeProducts {
-                subscriber: Some(Box::new(new_subscription)),
-                actions: vec![RunningAction::ListViewPrepare(token).into()],
+            match subscribers::plain_list_view_subscriber(token, out) {
+                Ok(new_subscription) => RuntimeProducts {
+                    subscriber: Some(Box::new(new_subscription)),
+                    actions: vec![RunningAction::ListViewPrepare(token).into()],
+                },
+                Err(cause) => unstarted_subscriber("plain list view", cause),
             }
         }
-        ErrorsSubscription(out) => {
-            let new_subscription = subscribers::errors_subscriber(out);
-            RuntimeProducts::subscriber(new_subscription)
-        }
-        StatisticsSubscription(out) => {
-            let new_subscription = statistics_subscriber(out);
-            RuntimeProducts::subscriber(new_subscription)
-        }
+        ErrorsSubscription(out) => match subscribers::errors_subscriber(out) {
+            Ok(new_subscription) => RuntimeProducts::subscriber(new_subscription),
+            Err(cause) => unstarted_subscriber("errors", cause),
+        },
+        StatisticsSubscription(out) => match statistics_subscriber(out) {
+            Ok(new_subscription) => RuntimeProducts::subscriber(new_subscription),
+            Err(cause) => unstarted_subscriber("statistics", cause),
+        },
     }
+}
+
+fn unstarted_subscriber(name: &str, cause: InitError) -> RuntimeProducts<MoniLibClient> {
+    let message = format!("Unable to start the {name} subscriber, subscription is dropped: {cause}");
+    error!(message);
+    //todo: set runtime error in state
+    RuntimeProducts::none()
 }
 
 #[derive(Debug)]
 pub(crate) enum State {
     Zero(Vec<WorkingAction>),
+    Failed(MoniError),
     Working(WorkingState),
 }
 

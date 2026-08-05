@@ -4,6 +4,7 @@ use crate::util::ExpenseId;
 use crate::{MoniError, MoniExpensePlainListSnapshot};
 use enumset::EnumSet;
 use jiff::Timestamp;
+use rdxlib::error::InitError;
 use rdxlib::subscribers::ComparableResult::{self, Comparable, NothingToCompare};
 use rdxlib::subscribers::{OutputSubscriber, Subscriber, SubscriberError, ViewId, ViewTransformer};
 use std::cmp::min;
@@ -16,11 +17,11 @@ use uuid::Uuid;
 pub fn plain_list_view_subscriber(
     id: ViewId,
     out: LibOutput<MoniExpensePlainListSnapshot>,
-) -> impl Subscriber<State=State, Flag=Dirty> {
+) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
     OutputSubscriber::new(id, PlainListTransformer::new(), out)
 }
 
-pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> impl Subscriber<State=State, Flag=Dirty> {
+pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
     OutputSubscriber::new(Uuid::new_v4().into(), BusinessErrorsTransformer, out)
 }
 
@@ -36,17 +37,21 @@ impl ViewTransformer<MoniLibClient> for BusinessErrorsTransformer {
     }
 
     fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
-        if let State::Working(WorkingState { model: _, running }) = &state {
-            return Comparable(running.errors.iter().map(|e| e.id).collect());
+        match state {
+            State::Working(WorkingState { model: _, running }) => {
+                Comparable(running.errors.iter().map(|e| e.id).collect())
+            }
+            State::Failed(error) => Comparable(vec![error.id]),
+            State::Zero(_) => NothingToCompare,
         }
-        NothingToCompare
     }
 
     fn slice(state: &State, _token: ViewId) -> Result<Self::Slice, SubscriberError> {
-        if let State::Working(WorkingState { model: _, running }) = &state {
-            return Ok(running.errors.clone());
+        match state {
+            State::Working(WorkingState { model: _, running }) => Ok(running.errors.clone()),
+            State::Failed(error) => Ok(vec![error.clone()]),
+            State::Zero(_) => Err(SubscriberError::MissingState),
         }
-        Err(SubscriberError::MissingState)
     }
 
     fn derive(&mut self, slice: Self::Slice) -> Option<Self::Product> {
@@ -134,7 +139,7 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
     }
 }
 
-pub fn statistics_subscriber(out: LibOutput<MoniStatistics>) -> impl Subscriber<State=State, Flag=Dirty> {
+pub fn statistics_subscriber(out: LibOutput<MoniStatistics>) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
     OutputSubscriber::new(Uuid::new_v4().into(), StatisticsTransformer, out)
 }
 

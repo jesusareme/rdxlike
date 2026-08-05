@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use super::{cmd::*, *};
 use crate::runtime::model_views::ClockedModelStateView;
 use crate::{
@@ -6,6 +7,8 @@ use crate::{
 };
 use std::mem;
 use rdxlib::cmd::Cmd::Direct;
+use tracing::error;
+use crate::LibErrorCause;
 use crate::runtime::Dirty::Statistics;
 
 pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
@@ -18,9 +21,9 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                 Ok(None) => ModelState::default(),
                 Ok(Some(content)) => match serde_json::from_str::<ModelState>(&content) {
                     Ok(model) => model,
-                    Err(error) => return failed_init(error),
+                    Err(error) => return failed_init(state, error),
                 },
-                Err(error) => return failed_init(error),
+                Err(error) => return failed_init(state, error),
             };
 
             let working = State::Working(WorkingState {
@@ -43,13 +46,17 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                 pending.push(action);
                 MoniProducts::none()
             }
+            State::Failed(_) => MoniProducts::none(),
             State::Working(working) => reducer_working(working, action),
         },
     }
 }
 
-fn failed_init(error: impl std::fmt::Debug) -> MoniProducts {
-    panic!("MoniLib was unable to initialize\n{:?}", error)
+fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
+    let error = MoniError::from(LibErrorCause::StateLoad(format!("{cause:?}")));
+    error!("MoniLib was unable to initialize: {error}");
+    *state = State::Failed(error);
+    MoniProducts::none()
 }
 
 fn reducer_working(state: &mut WorkingState, action: WorkingAction) -> MoniProducts {

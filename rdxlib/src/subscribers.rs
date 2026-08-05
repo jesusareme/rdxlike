@@ -1,4 +1,5 @@
 use crate::Client;
+use crate::error::InitError;
 use crate::subscribers::ComparableResult::Comparable;
 use enumset::EnumSet;
 use std::error::Error;
@@ -6,6 +7,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc;
 use std::thread;
+use std::thread::JoinHandle;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -95,14 +97,15 @@ pub struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT
 	last: Option<VT::ComparableValue>,
 	sender: Sender<Option<VT::Slice>>,
 	output: VO,
+	thread_handle: JoinHandle<()>,
 }
 
 impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubscriber<C, VT, VO> {
-	pub fn new(id: ViewId, transformer: VT, output: VO) -> Self {
+	pub fn new(id: ViewId, transformer: VT, output: VO) -> Result<Self, InitError> {
 		let (sender, receiver) = mpsc::channel::<Option<VT::Slice>>();
 		let builder = thread::Builder::new().name(id.to_string());
 		let output_clone = output.clone();
-		_ = builder.spawn(move || {
+		let thread_handle = builder.spawn(move || {
 			let mut transformer = transformer;
 			while let Some(slice) = receiver.recv().unwrap() {
 				if output_clone.is_active() {
@@ -114,13 +117,19 @@ impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubsc
 				}
 			}
 			debug!("dropping thread for output subscriber: {}", id)
-		});
-		OutputSubscriber {
+		})?;
+
+		Ok(OutputSubscriber {
 			id,
 			last: None,
 			sender,
 			output,
-		}
+			thread_handle,
+		})
+	}
+
+	pub fn is_finished(&self) -> bool {
+		self.thread_handle.is_finished()
 	}
 }
 

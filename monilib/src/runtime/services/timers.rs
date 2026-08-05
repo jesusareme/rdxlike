@@ -6,13 +6,16 @@ use std::num::NonZeroU64;
 use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, mpsc};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tracing::debug;
 use rdxlib::util::MessageSend;
+use crate::MoniError;
 use crate::runtime::MoniMessage;
 
 pub struct Timers {
     tx: Sender<TimersMessage>,
+    thread_handle: JoinHandle<()>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -99,11 +102,12 @@ impl Timer {
 }
 
 impl Timers {
-    pub fn new(action_tx: &impl MessageSend<Message=MoniMessage>, clock: &Arc<dyn ClockSource + Send + Sync>) -> Self {
+    pub fn new(action_tx: &impl MessageSend<Message=MoniMessage>, clock: &Arc<dyn ClockSource + Send + Sync>) -> Result<Self, MoniError> {
         let action_tx = action_tx.clone();
         let (tx, rx) = mpsc::channel();
         let clock_clone = Arc::clone(clock);
-        _ = thread::spawn(move || {
+        let builder = thread::Builder::new().name("Timers.thread".to_string());
+        let thread_handle = builder.spawn(move || {
             debug!("Starting Timers service.");
 
             let mut tasks: HashMap<TimerId, Timer> = HashMap::new();
@@ -133,9 +137,13 @@ impl Timers {
                 next = Self::next_deadline(&tasks);
             }
             debug!("Ending Timers service.");
-        });
+        })?;
 
-        Timers { tx }
+        Ok(Timers { tx, thread_handle })
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.thread_handle.is_finished()
     }
 
     fn advance(
