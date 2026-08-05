@@ -4,6 +4,7 @@ use crate::util::{ClockSource, ExpenseId, IdSource};
 use crate::{ExpenseCategory, LibErrorCause, MoniError, MoniErrorType};
 use boltffi::{EventSubscription, data, error};
 use jiff::Zoned;
+use rdxlib::subscribers::ViewOutput;
 use std::{
     error::Error,
     fmt::{Debug, Display, Formatter},
@@ -12,7 +13,6 @@ use std::{
     time::SystemTime,
 };
 use uuid::Uuid;
-use rdxlib::subscribers::ViewOutput;
 
 #[data]
 #[derive(Clone, Debug, PartialEq)]
@@ -74,7 +74,7 @@ pub struct MoniExpense {
 #[derive(Clone)]
 pub struct MoniExpenseUpdate {
     pub uuid: Uuid,
-    pub expense: MoniExpense
+    pub expense: MoniExpense,
 }
 
 #[data]
@@ -92,17 +92,25 @@ fn date_error(cause: MoniValidationErrorCause) -> MoniValidationError {
 }
 
 impl MoniExpenseUpdate {
-    pub fn into_updatable_expense(self, clock: &dyn ClockSource) -> Result<Expense, MoniValidationError> {
-        let MoniExpenseUpdate { uuid,
-            expense: MoniExpense { date, amount, comment, category}
+    pub fn into_updatable_expense(
+        self,
+        clock: &dyn ClockSource,
+    ) -> Result<Expense, MoniValidationError> {
+        let MoniExpenseUpdate {
+            uuid,
+            expense:
+                MoniExpense {
+                    date,
+                    amount,
+                    comment,
+                    category,
+                },
         } = self;
 
         let date = match date {
             None => return Err(date_error(MoniValidationErrorCause::Empty)),
-            Some(system_date) => {
-                Zoned::try_from(system_date)
-                    .map_err(|_| date_error(MoniValidationErrorCause::Date))?
-            },
+            Some(system_date) => Zoned::try_from(system_date)
+                .map_err(|_| date_error(MoniValidationErrorCause::Date))?,
         };
 
         if date > clock.now_civil() {
@@ -184,7 +192,7 @@ where
 {
     output: Arc<EventSubscription<V>>,
 }
-// 
+//
 // impl<V> Debug for LibOutput<V>
 // where
 //     V: Debug + Send + 'static,
@@ -235,7 +243,7 @@ where
 
 pub fn try_state_path(path: impl AsRef<Path>) -> Result<(), MoniError> {
     match std::fs::exists(path) {
-        Ok(true)  => Ok(()),
+        Ok(true) => Ok(()),
         _ => Err(MoniError::new(MoniErrorType::Lib(LibErrorCause::Path))),
     }
 }
@@ -243,7 +251,10 @@ pub fn try_state_path(path: impl AsRef<Path>) -> Result<(), MoniError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{FixedIdSource, StuckClock, contemporary_ref_date, distant_future_ref_date, distant_past_ref_date, ref_id};
+    use crate::testing::{
+        FixedIdSource, StuckClock, contemporary_ref_date, distant_future_ref_date,
+        distant_past_ref_date, ref_id,
+    };
     use jiff::ToSpan;
     use rstest::rstest;
 
@@ -259,7 +270,8 @@ mod tests {
         let expense = m_expense
             .into_expense(&clock, &ids)
             .expect("Conversion should work without errors");
-        let compared = Expense::new_default_with(ExpenseId::from(ref_id()), clock.now_civil(), None);
+        let compared =
+            Expense::new_default_with(ExpenseId::from(ref_id()), clock.now_civil(), None);
 
         assert_eq!(expense, compared)
     }
@@ -267,7 +279,7 @@ mod tests {
     #[test]
     fn into_expense_date_future() {
         let m_expense = MoniExpense {
-            date:  Some(distant_future_ref_date().into()),
+            date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
         };
 
@@ -287,7 +299,7 @@ mod tests {
     #[test]
     fn into_expense_date_past() {
         let m_expense = MoniExpense {
-            date:  Some(distant_future_ref_date().into()),
+            date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
         };
 
@@ -310,15 +322,19 @@ mod tests {
     fn into_updatable_expense_empty_date_should_err() {
         let no_date_expense = MoniExpense {
             date: None,
-            .. MoniExpense::default()
+            ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
             uuid: ref_id(),
             expense: no_date_expense,
         };
-        let clock = StuckClock { stuck_at: contemporary_ref_date() };
+        let clock = StuckClock {
+            stuck_at: contemporary_ref_date(),
+        };
 
-        let error = expense_update.into_updatable_expense(&clock).expect_err("Should be error");
+        let error = expense_update
+            .into_updatable_expense(&clock)
+            .expect_err("Should be error");
 
         assert_eq!(error.cause, MoniValidationErrorCause::Empty);
         assert_eq!(error.field, "date");
@@ -328,15 +344,19 @@ mod tests {
     fn into_updatable_expense_future_date_should_err() {
         let future_date_expense = MoniExpense {
             date: Some(distant_future_ref_date().into()),
-            .. MoniExpense::default()
+            ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
             uuid: ref_id(),
             expense: future_date_expense,
         };
-        let clock = StuckClock { stuck_at: contemporary_ref_date() };
+        let clock = StuckClock {
+            stuck_at: contemporary_ref_date(),
+        };
 
-        let error = expense_update.into_updatable_expense(&clock).expect_err("Should be error");
+        let error = expense_update
+            .into_updatable_expense(&clock)
+            .expect_err("Should be error");
 
         assert_eq!(error.cause, Range);
         assert_eq!(error.field, "date");
@@ -346,15 +366,19 @@ mod tests {
     fn into_updatable_expense_past_date_should_ok() {
         let past_date_expense = MoniExpense {
             date: Some(distant_past_ref_date().into()),
-            .. MoniExpense::default()
+            ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
             uuid: ref_id(),
             expense: past_date_expense,
         };
-        let clock = StuckClock { stuck_at: contemporary_ref_date() };
+        let clock = StuckClock {
+            stuck_at: contemporary_ref_date(),
+        };
 
-        let expense = expense_update.into_updatable_expense(&clock).expect("Should be ok");
+        let expense = expense_update
+            .into_updatable_expense(&clock)
+            .expect("Should be ok");
 
         let compared =
             Expense::new_default_with(ExpenseId::from(ref_id()), distant_past_ref_date(), None);
@@ -373,8 +397,12 @@ mod tests {
             amount,
             ..MoniExpense::default()
         };
-        let clock = StuckClock { stuck_at: contemporary_ref_date() };
-        let ids = FixedIdSource { id: ExpenseId::from(ref_id()) };
+        let clock = StuckClock {
+            stuck_at: contemporary_ref_date(),
+        };
+        let ids = FixedIdSource {
+            id: ExpenseId::from(ref_id()),
+        };
 
         let result = m_expense.into_expense(&clock, &ids);
 
@@ -408,7 +436,9 @@ mod tests {
             uuid: ref_id(),
             expense: m_expense,
         };
-        let clock = StuckClock { stuck_at: contemporary_ref_date() };
+        let clock = StuckClock {
+            stuck_at: contemporary_ref_date(),
+        };
 
         let result = expense_update.into_updatable_expense(&clock);
 

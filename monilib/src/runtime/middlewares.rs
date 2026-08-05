@@ -1,4 +1,4 @@
-use super::{MoniProducts, MoniLibClient, State};
+use super::{MoniLibClient, MoniProducts, State};
 use crate::action::Action;
 use crate::util::ClockSource;
 use rdxlib::middleware::{ChainableMiddleware, Next};
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 pub enum MoniMiddleware {
-    Logger { prev: bool, post: bool},
+    Logger { prev: bool, post: bool },
     Clock(Arc<dyn ClockSource>),
 }
 
@@ -19,7 +19,7 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
     ) -> MoniProducts {
         use MoniMiddleware::*;
         match self {
-            Logger {prev, post} => {
+            Logger { prev, post } => {
                 if *prev {
                     debug!("initial state before <{:?}> is {:?}", action, state);
                 }

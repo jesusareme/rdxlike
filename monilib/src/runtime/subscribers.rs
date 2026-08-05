@@ -1,4 +1,6 @@
-use super::{AppState, Dirty, Expense, MoniLibClient, PlainListViewState, State, Statistics, VersionedArc};
+use super::{
+    AppState, Dirty, Expense, MoniLibClient, PlainListViewState, State, Statistics, VersionedArc,
+};
 use crate::inout::{LibOutput, MoniStatistics};
 use crate::util::ExpenseId;
 use crate::{MoniError, MoniExpensePlainListSnapshot};
@@ -9,25 +11,27 @@ use rdxlib::subscribers::ComparableResult::{self, Comparable, NothingToCompare};
 use rdxlib::subscribers::{OutputSubscriber, Subscriber, SubscriberError, ViewId, ViewTransformer};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::ops::Sub;
 use std::fmt::Debug;
+use std::ops::Sub;
 use tracing::error;
 use uuid::Uuid;
 
 pub fn plain_list_view_subscriber(
     id: ViewId,
     out: LibOutput<MoniExpensePlainListSnapshot>,
-) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
+) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
     OutputSubscriber::new(id, PlainListTransformer::new(), out)
 }
 
-pub fn errors_subscriber(out: LibOutput<Vec<MoniError>>) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
+pub fn errors_subscriber(
+    out: LibOutput<Vec<MoniError>>,
+) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
     OutputSubscriber::new(Uuid::new_v4().into(), ErrorsViewTransformer::default(), out)
 }
 
 #[derive(Default)]
 struct ErrorsViewTransformer {
-    last_consumed_id: Option<Uuid>
+    last_consumed_id: Option<Uuid>,
 }
 
 impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
@@ -40,7 +44,9 @@ impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
     }
 
     fn comparable(state: &State, _token: ViewId) -> ComparableResult<Self::ComparableValue> {
-        state.running.errors
+        state
+            .running
+            .errors
             .last()
             .map_or_else(|| NothingToCompare, |last| Comparable(last.id))
     }
@@ -51,21 +57,18 @@ impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
 
     fn derive(&mut self, slice: Self::Slice) -> Option<Self::Product> {
         let Some(last) = slice.last() else {
-            return None
+            return None;
         };
         let last = last.id;
         let mut new_errors = vec![];
         if let Some(last_processed_id) = self.last_consumed_id {
-            new_errors.extend(
-                slice.into_iter()
-                .rev()
-                .map_while(|error| {
+            new_errors.extend(slice.into_iter().rev().map_while(|error| {
                 if error.id != last_processed_id {
                     Some(error)
                 } else {
                     None
-                }})
-            );
+                }
+            }));
         } else {
             new_errors = slice;
         }
@@ -159,7 +162,9 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
     }
 }
 
-pub fn statistics_subscriber(out: LibOutput<MoniStatistics>) -> Result<impl Subscriber<State=State, Flag=Dirty>, InitError> {
+pub fn statistics_subscriber(
+    out: LibOutput<MoniStatistics>,
+) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
     OutputSubscriber::new(Uuid::new_v4().into(), StatisticsTransformer, out)
 }
 

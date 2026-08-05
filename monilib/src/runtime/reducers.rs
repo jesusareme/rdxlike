@@ -1,6 +1,8 @@
 use super::{cmd::*, *};
 use crate::LibErrorCause;
+use crate::action::WorkingAction::{Model, Save, SuccessfulSave, Watchdog, WatchdogWatching};
 use crate::runtime::Dirty::Statistics;
+use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::model_views::ClockedModelStateView;
 use crate::{
     action::{Action, WorkingAction},
@@ -10,8 +12,6 @@ use rdxlib::cmd::Cmd::Direct;
 use std::fmt::Debug;
 use std::mem;
 use tracing::error;
-use crate::action::WorkingAction::{Model, Save, SuccessfulSave, Watchdog, WatchdogWatching};
-use crate::runtime::cmd::DebounceCmd::DelayedSave;
 
 pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
     use Action::*;
@@ -62,45 +62,46 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
 
                     Watchdog => MoniProducts::cmd(TimeSubscriptionCmd::Watchdog),
 
-                    Model(action) => reducer_model(ClockedModelStateView::new(model, &mut state.running), action),
+                    Model(action) => reducer_model(
+                        ClockedModelStateView::new(model, &mut state.running),
+                        action,
+                    ),
 
                     WatchdogWatching => {
                         debug!("watchdog watching!");
                         MoniProducts::none()
-                    }
-                    // Action::DelayedSave => {
-                    //
-                    // }
+                    } // Action::DelayedSave => {
+                      //
+                      // }
 
-                    // Action::AddToInfo(text) => Products::none(),
-                    // Action::AddFromLongCalculation => {
-                    // 	let counter = state.counter.clone(); // we can move values for later use
-                    // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
-                    // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
-                    // }
-                    // Action::AddEverySecond(interval) => {
-                    // 	let operation = DropCancellation::new(Uuid::new_v4());
-                    // 	let handle = operation.cancellation_handle();
-                    // 	state.counting = Some(operation);
-                    //
-                    // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
-                    // 		interval,
-                    // 		handle,
-                    // 	}));
-                    // 	Products::cmd(cmd)
-                    // }
-                    // Action::AddFromAsync => {
-                    // 	let counter = state.counter;
-                    // 	let cmd = Cmd::Async(Box::new(move || {
-                    // 		thread::sleep(Duration::from_secs(1));
-                    // 		Action::Add(counter * 2)
-                    // 	}));
-                    // 	Products::cmd(cmd)
-                    // }
+                      // Action::AddToInfo(text) => Products::none(),
+                      // Action::AddFromLongCalculation => {
+                      // 	let counter = state.counter.clone(); // we can move values for later use
+                      // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
+                      // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
+                      // }
+                      // Action::AddEverySecond(interval) => {
+                      // 	let operation = DropCancellation::new(Uuid::new_v4());
+                      // 	let handle = operation.cancellation_handle();
+                      // 	state.counting = Some(operation);
+                      //
+                      // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
+                      // 		interval,
+                      // 		handle,
+                      // 	}));
+                      // 	Products::cmd(cmd)
+                      // }
+                      // Action::AddFromAsync => {
+                      // 	let counter = state.counter;
+                      // 	let cmd = Cmd::Async(Box::new(move || {
+                      // 		thread::sleep(Duration::from_secs(1));
+                      // 		Action::Add(counter * 2)
+                      // 	}));
+                      // 	Products::cmd(cmd)
+                      // }
                 }
-            },
+            }
         },
-
     }
 }
 
@@ -158,7 +159,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
 
             MoniProducts::none().with_dirty(dirty).with_delayed_save()
         }
-        
+
         ModelAction::Update(updated_expense) => {
             match state
                 .model_state
@@ -211,7 +212,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
                 }
             }
         }
-        
+
         ModelAction::Delete(id) => {
             match state
                 .model_state
@@ -241,24 +242,23 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
                     MoniProducts::none().with_dirty(dirty).with_delayed_save()
                 }
             }
-        },
+        }
 
-        ModelAction::StatisticsAll => {
-            match &mut state.model_state.statistics_all {
-                Some(s) if s.at_movements_version == state.model_state.movements.version()
-                => {
-                    s.requested_at = state.time.timestamp();
-                    MoniProducts::none().with_dirty(Statistics)
-                },
-                _ => MoniProducts::cmd(AsyncCmd::StatisticsCalculation(state.model_state.movements.clone(),
-                                                                   state.time.timestamp(),
-                )),
+        ModelAction::StatisticsAll => match &mut state.model_state.statistics_all {
+            Some(s) if s.at_movements_version == state.model_state.movements.version() => {
+                s.requested_at = state.time.timestamp();
+                MoniProducts::none().with_dirty(Statistics)
             }
+            _ => MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
+                state.model_state.movements.clone(),
+                state.time.timestamp(),
+            )),
         },
 
         ModelAction::StatisticsAllResult(statistics) => {
-            if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at) {
-                return MoniProducts::none()
+            if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at)
+            {
+                return MoniProducts::none();
             }
 
             state.model_state.statistics_all = Some(statistics);

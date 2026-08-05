@@ -4,12 +4,17 @@ mod persistence;
 mod runtime;
 mod util;
 
+pub mod error;
 #[cfg(test)]
 mod testing;
-pub mod error;
 
 pub use crate::error::{LibErrorCause, MoniDomainError, MoniError, MoniErrorType};
 use crate::inout::MoniStatistics;
+pub use crate::inout::{
+    LibOutput, MoniExpense, MoniExpensePlainListSnapshot, MoniExpenseUpdate, MoniValidationError,
+    MoniValidationErrorCause, PlainListItem,
+};
+pub use crate::runtime::ExpenseCategory;
 use crate::runtime::{MoniMessage, RuntimeEnvironment};
 use crate::util::ExpenseId;
 use action::*;
@@ -27,11 +32,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, RandomIdSource, SystemClockSource};
 use uuid::Uuid;
-pub use crate::inout::{
-    LibOutput, MoniExpense, MoniExpensePlainListSnapshot, MoniExpenseUpdate, MoniValidationError,
-    MoniValidationErrorCause, PlainListItem,
-};
-pub use crate::runtime::ExpenseCategory;
 
 #[data]
 #[derive(Clone, Debug)]
@@ -48,7 +48,6 @@ impl AsRef<str> for MoniLogLevel {
         }
     }
 }
-
 
 #[data]
 #[derive(Clone, Debug)]

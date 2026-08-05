@@ -1,12 +1,12 @@
-use std::assert_matches;
+use monilib::LibErrorCause::Path;
+use monilib::MoniErrorType::Lib;
 use monilib::{LibClockSource, LibConfig, LibErrorCause, MoniErrorType, MoniLib, MoniLogLevel};
+use std::assert_matches;
 use std::fs;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
-use monilib::LibErrorCause::Path;
-use monilib::MoniErrorType::Lib;
 
 fn config() -> LibConfig {
     LibConfig {
@@ -49,14 +49,20 @@ fn unreadable_state_should_report_error_as_view() {
         .expect("corrupted state file should not error library");
     let errors_out = lib.errors();
 
-
     wait();
     let Some(errors) = errors_out.pop_event() else {
         panic!("Library should have reported back some error on its output")
     };
 
-    assert_eq!(errors.len(), 1, "Only failed state error should be produced");
-    assert_matches!(errors.first().unwrap().error_type, Lib(LibErrorCause::StateLoad(_)));
+    assert_eq!(
+        errors.len(),
+        1,
+        "Only failed state error should be produced"
+    );
+    assert_matches!(
+        errors.first().unwrap().error_type,
+        Lib(LibErrorCause::StateLoad(_))
+    );
 
     assert!(!lib.has_finished());
 }

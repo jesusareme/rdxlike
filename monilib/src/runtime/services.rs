@@ -2,6 +2,7 @@ mod timers;
 pub use timers::Timers;
 
 use super::{ModelState, MoniMessage, cmd::PersistenceCmd};
+use crate::MoniError;
 use crate::action::{Action, WorkingAction};
 use crate::util::ClockSource;
 use rdxlib::util::MessageSend;
@@ -16,7 +17,6 @@ use std::{
     thread::{self, JoinHandle},
 };
 use tracing::{debug, error};
-use crate::MoniError;
 
 pub struct Services {
     pub persistence: PersistenceService,

@@ -4,12 +4,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::time::Instant;
 use std::{
     ops::Deref,
-    sync::{
-        Arc, RwLock,
-    },
+    sync::{Arc, RwLock},
 };
 use uuid::Uuid;
-
 
 pub trait ClockSource {
     fn now_civil(&self) -> Zoned;

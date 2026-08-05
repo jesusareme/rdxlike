@@ -23,17 +23,22 @@ pub fn distant_past_ref_date() -> Zoned {
     Zoned::new(Timestamp::UNIX_EPOCH, TimeZone::UTC)
 }
 
-pub fn ordered_by_index_map<const S: usize, T: PartialOrd + Clone>(original: Vec<T>, expected_order: [usize; S]) -> Vec<T> {
+pub fn ordered_by_index_map<const S: usize, T: PartialOrd + Clone>(
+    original: Vec<T>,
+    expected_order: [usize; S],
+) -> Vec<T> {
     assert_eq!(original.len(), S);
     let mut nullable: Vec<_> = original.into_iter().map(Some).collect();
-    expected_order.iter().filter_map(|index| nullable[*index].take()).collect()
+    expected_order
+        .iter()
+        .filter_map(|index| nullable[*index].take())
+        .collect()
 }
 
 pub fn ordered_expenses<const S: usize>(ref_date: Zoned) -> [Expense; S] {
     std::array::from_fn(|i| {
-        let id = ExpenseId::from(
-            Uuid::from_str(&format!("01234567-0123-0123-0123-{:012}", i)).unwrap(),
-        );
+        let id =
+            ExpenseId::from(Uuid::from_str(&format!("01234567-0123-0123-0123-{:012}", i)).unwrap());
         Expense::new_default_with(id, &ref_date + (i as i64).days(), Some(i as i64))
     })
 }

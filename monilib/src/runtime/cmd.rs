@@ -1,5 +1,5 @@
-use crate::action::ModelAction::StatisticsAllResult;
 use crate::action::Action;
+use crate::action::ModelAction::StatisticsAllResult;
 use crate::runtime::MoniCommand;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::cmd::Subscription::{Debounce, Time};
@@ -24,20 +24,18 @@ impl EnvironmentCommand for ServiceCommand {
             ServiceCommand::Persistence(p_cmd) => {
                 env.persistence.execute(p_cmd);
             }
-            ServiceCommand::Subscribe(s_cmd) => {
-                match s_cmd {
-                    Time(cmd) => {
-                        env.timers.submit(cmd.into());
-                    }
-                    Debounce(cmd) => {
-                        let DelayedSave(ref action) = cmd;
-                        match action {
-                            DebounceAction::Bump => env.timers.submit(cmd.into()),
-                            DebounceAction::Cancel => env.timers.remove(cmd.into()),
-                        }
+            ServiceCommand::Subscribe(s_cmd) => match s_cmd {
+                Time(cmd) => {
+                    env.timers.submit(cmd.into());
+                }
+                Debounce(cmd) => {
+                    let DelayedSave(ref action) = cmd;
+                    match action {
+                        DebounceAction::Bump => env.timers.submit(cmd.into()),
+                        DebounceAction::Cancel => env.timers.remove(cmd.into()),
                     }
                 }
-            }
+            },
         }
     }
 }
@@ -50,22 +48,19 @@ pub enum AsyncCmd {
 impl AsyncCmd {
     pub fn name(&self) -> &'static str {
         match self {
-            AsyncCmd::StatisticsCalculation(_, _) => "StatisticsCalculation"
+            AsyncCmd::StatisticsCalculation(_, _) => "StatisticsCalculation",
         }
     }
 }
 
 impl AsyncCmd {
-    pub fn into_job(self) ->Box<dyn FnOnce() -> Action + Send + 'static> {
+    pub fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + 'static> {
         match self {
             AsyncCmd::StatisticsCalculation(expenses, request_time) => Box::new(move || {
                 // Supposedly long data extraction...
                 let version = expenses.version();
                 let len = expenses.len();
-                let amounts: Vec<_> = expenses
-                    .iter()
-                    .map(|e| e.amount)
-                    .collect();
+                let amounts: Vec<_> = expenses.iter().map(|e| e.amount).collect();
 
                 drop(expenses);
 
@@ -77,30 +72,27 @@ impl AsyncCmd {
                         max_expense: i64::MIN,
                         min_expense: i64::MAX,
                     };
-                    Some(
-                        amounts.into_iter().fold(acc, |mut st, a| {
-                            st.sum += a;
-                            if a > st.max_expense {
-                                st.max_expense = a;
-                            };
-                            if a < st.min_expense {
-                                st.min_expense = a
-                            };
-                            st
-                        })
-                    )
+                    Some(amounts.into_iter().fold(acc, |mut st, a| {
+                        st.sum += a;
+                        if a > st.max_expense {
+                            st.max_expense = a;
+                        };
+                        if a < st.min_expense {
+                            st.min_expense = a
+                        };
+                        st
+                    }))
                 } else {
                     None
                 };
 
-                StatisticsAllResult(
-                    Statistics {
-                        at_movements_version: version,
-                        requested_at: request_time,
-                        items_len: len,
-                        results,
-                    }
-                ).into()
+                StatisticsAllResult(Statistics {
+                    at_movements_version: version,
+                    requested_at: request_time,
+                    items_len: len,
+                    results,
+                })
+                .into()
             }),
         }
     }
@@ -134,7 +126,6 @@ pub enum PersistenceCmd {
     Save(ModelState),
 }
 
-
 impl From<PersistenceCmd> for ServiceCommand {
     fn from(cmd: PersistenceCmd) -> Self {
         ServiceCommand::Persistence(cmd)
@@ -161,12 +152,10 @@ impl From<DebounceCmd> for Subscription {
 
 impl From<AsyncCmd> for MoniCommand {
     fn from(cmd: AsyncCmd) -> Self {
-        Cmd::Async(
-            AsyncTask {
-                name: cmd.name().to_string(),
-                job: cmd.into_job(),
-            }
-        )
+        Cmd::Async(AsyncTask {
+            name: cmd.name().to_string(),
+            job: cmd.into_job(),
+        })
     }
 }
 
