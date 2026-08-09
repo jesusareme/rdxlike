@@ -36,7 +36,7 @@ use crate::runtime::reducers::reducer;
 use rdxlib::messages::Message;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
-use rdxlib::threadpool::ThreadPool;
+use rdxlib::primitives::ThreadPool;
 use rdxlib::util::{MessageSend, MessageSender};
 use rdxlib::{Client, Runtime, RuntimeConfig};
 

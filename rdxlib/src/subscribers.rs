@@ -10,6 +10,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use tracing::debug;
 use uuid::Uuid;
+use crate::primitives::{one_slot_channel, OneSlotSender};
 
 #[derive(Debug)]
 pub enum SubscriberError {
@@ -96,18 +97,18 @@ pub trait ViewOutput<V: Send + 'static>: Clone + Send + 'static {
 pub struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> {
 	id: ViewId,
 	last: Option<VT::ComparableValue>,
-	sender: Sender<Option<VT::Slice>>,
+	sender: OneSlotSender<VT::Slice>,
 	output: VO,
 	thread_handle: JoinHandle<()>,
 }
 
 impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubscriber<C, VT, VO> {
 	pub fn new(id: ViewId, mut transformer: VT, output: VO) -> Result<Self, InitError> {
-		let (sender, receiver) = mpsc::channel::<Option<VT::Slice>>();
+		let (sender, receiver) = one_slot_channel::<VT::Slice>();
 		let builder = thread::Builder::new().name(id.to_string());
 		let output_clone = output.clone();
 		let thread_handle = builder.spawn(move || {
-			while let Some(slice) = receiver.recv().unwrap() {
+			for slice in receiver {
 				if output_clone.is_active() {
 					if let Some(product) = transformer.derive(slice) {
 						output_clone.send(product);
@@ -148,7 +149,7 @@ impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> Subscriber 
 			self.last = current_comparable;
 			let slice = VT::slice(new_state, self.id)?;
 			self.sender
-				.send(Some(slice))
+				.send(slice)
 				.map_err(|_| SubscriberError::UnableToNotifySubscriber)?;
 		}
 		Ok(())
@@ -160,11 +161,5 @@ impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> Subscriber 
 
 	fn interested_in(&self, offered: &EnumSet<C::Flag>) -> bool {
 		VT::interested_in(offered)
-	}
-}
-
-impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> Drop for OutputSubscriber<C, VT, VO> {
-	fn drop(&mut self) {
-		_ = self.sender.send(None)
 	}
 }

@@ -4,14 +4,14 @@ pub mod messages;
 pub mod middleware;
 pub mod products;
 pub mod subscribers;
-pub mod threadpool;
+pub mod primitives;
 pub mod util;
 
 use crate::cmd::{Cmd, EnvironmentCommand};
 use crate::messages::Message;
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::products::{ActionProducts, RuntimeProducts};
-use crate::threadpool::{JobsDispatcher, ThreadPool};
+use crate::primitives::{JobsDispatcher, ThreadPool};
 use crate::util::MessageSend;
 use enumset::EnumSet;
 use std::collections::VecDeque;
