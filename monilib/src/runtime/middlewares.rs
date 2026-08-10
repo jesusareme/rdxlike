@@ -70,7 +70,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            products.dirty,
+            products.flags,
             Dirty::FinancesCurrentMonth | Dirty::Categories
         );
     }

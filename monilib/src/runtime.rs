@@ -135,8 +135,10 @@ fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
 fn unstarted_subscriber(name: &str, cause: InitError) -> RuntimeProducts<MoniLibClient> {
     let message = format!("Unable to start the {name} subscriber, subscription is dropped: {cause}");
     error!(message);
-    //todo: set runtime error in state
-    RuntimeProducts::none()
+    RuntimeProducts {
+        subscriber: None,
+        actions: vec![RunningAction::Error(cause.into()).into()],
+    }
 }
 
 #[derive(Debug)]

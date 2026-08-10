@@ -39,6 +39,7 @@ pub enum WorkingAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunningAction {
+    Error(MoniError),
     ListViewHint(ViewId, ExpenseId),
     ListViewPrepare(ViewId),
 }

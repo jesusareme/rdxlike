@@ -23,7 +23,7 @@ pub enum MoniValidationErrorCause {
 }
 
 #[error]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MoniValidationError {
     cause: MoniValidationErrorCause,
     field: String,
@@ -233,6 +233,7 @@ where
 }
 
 pub fn try_state_path(path: impl AsRef<Path>) -> Result<(), MoniError> {
+    // TODO: Implement a solid way of checking access.
     match std::fs::exists(path) {
         Ok(true) => Ok(()),
         _ => Err(MoniError::new(MoniErrorType::Lib(LibErrorCause::Path))),

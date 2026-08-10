@@ -28,7 +28,7 @@ use std::{
     sync::{Arc, mpsc},
     thread::Builder,
 };
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, RandomIdSource, SystemClockSource};
 use uuid::Uuid;
@@ -138,8 +138,9 @@ impl MoniLib {
                 clock: shared_clock,
             };
             match runtime::new(config) {
-                Ok(runtime) => {
+                Ok(mut runtime) => {
                     if ready_tx.send(Ok(())).is_err() {
+                        error!("Error while trying to response back after successful runtime init");
                         return;
                     }
                     runtime.run();

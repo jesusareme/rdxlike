@@ -8,21 +8,21 @@ use std::sync::mpsc::SendError;
 use uuid::Uuid;
 
 #[error]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MoniError {
     pub id: Uuid,
     pub error_type: MoniErrorType,
 }
 
 #[data]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MoniErrorType {
     Domain(MoniDomainError),
     Lib(LibErrorCause),
 }
 
 #[data]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MoniDomainError {
     Validation(MoniValidationError),
     ExpenseNotFound(Uuid),
@@ -99,7 +99,7 @@ impl Display for MoniDomainError {
 impl Error for MoniError {}
 
 #[data]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LibErrorCause {
     Sender,
     Path,

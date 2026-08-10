@@ -118,6 +118,11 @@ fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
 
 fn reducer_running(state: &mut RunningState, action: RunningAction) -> MoniProducts {
     match action {
+        RunningAction::Error(error) => {
+            state.errors.push(error);
+            MoniProducts::none()
+        },
+
         RunningAction::ListViewHint(token, id) => {
             if let Some(view_state) = state.plain_list.get_mut(&token) {
                 view_state.hint = Some(id);
@@ -488,7 +493,7 @@ mod reducer_model_test {
             ModelAction::Add(expense.clone()),
         );
 
-        assert_eq!(products.dirty, dirty);
+        assert_eq!(products.flags, dirty);
         assert_eq!(
             products.cmds,
             vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
@@ -615,7 +620,7 @@ mod reducer_model_test {
             ModelAction::Update(Expense::default()),
         );
 
-        assert!(products.dirty.is_empty());
+        assert!(products.flags.is_empty());
         assert!(products.cmds.is_empty());
         assert_eq!(errors.len(), 1);
         assert!(matches!(
@@ -641,7 +646,7 @@ mod reducer_model_test {
             ModelAction::Update(expense.clone()),
         );
 
-        assert!(products.dirty.is_empty());
+        assert!(products.flags.is_empty());
         assert!(products.cmds.is_empty());
         assert!(errors.is_empty());
         assert_eq!(*state.movements, vec![expense]);
@@ -668,7 +673,7 @@ mod reducer_model_test {
             ModelAction::Update(updated.clone()),
         );
 
-        assert_eq!(products.dirty, EnumSet::only(Dirty::FinancesCurrentMonth));
+        assert_eq!(products.flags, EnumSet::only(Dirty::FinancesCurrentMonth));
         assert_eq!(
             products.cmds,
             vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
@@ -750,7 +755,7 @@ mod reducer_model_test {
             ModelAction::Update(updated_element.clone()),
         );
 
-        assert_eq!(products.dirty, expected_dirty);
+        assert_eq!(products.flags, expected_dirty);
         assert_eq!(
             products.cmds,
             vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
@@ -782,7 +787,7 @@ mod reducer_model_test {
         );
 
         assert_eq!(
-            products.dirty,
+            products.flags,
             EnumSet::only(Dirty::FinancesBeforeThisMonth)
         );
         assert_eq!(
@@ -813,7 +818,7 @@ mod reducer_model_test {
             ModelAction::Delete(expense.id),
         );
 
-        assert_eq!(products.dirty, dirty);
+        assert_eq!(products.flags, dirty);
         assert_eq!(
             products.cmds,
             vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
@@ -836,7 +841,7 @@ mod reducer_model_test {
             )),
         );
 
-        assert!(products.dirty.is_empty());
+        assert!(products.flags.is_empty());
         assert!(products.cmds.is_empty());
         assert_eq!(errors.len(), 1);
         assert!(matches!(
