@@ -27,28 +27,28 @@ impl<C: Client> RuntimeProducts<C> {
 
 pub struct ActionProducts<C: Client> {
 	pub cmds: Vec<Cmd<C>>,
-	pub dirty: EnumSet<C::Flag>,
+	pub flags: EnumSet<C::Flag>,
 }
 
 impl<C: Client> ActionProducts<C> {
 	pub fn none() -> Self {
 		ActionProducts {
 			cmds: vec![],
-			dirty: EnumSet::empty(),
+			flags: EnumSet::empty(),
 		}
 	}
 
 	pub fn cmd(cmd: impl Into<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds: vec![cmd.into()],
-			dirty: EnumSet::empty(),
+			flags: EnumSet::empty(),
 		}
 	}
 
 	pub fn cmds(cmds: Vec<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds,
-			dirty: EnumSet::empty(),
+			flags: EnumSet::empty(),
 		}
 	}
 
@@ -58,7 +58,7 @@ impl<C: Client> ActionProducts<C> {
 	}
 
 	pub fn with_dirty(mut self, flags: impl Into<EnumSet<C::Flag>>) -> Self {
-		self.dirty |= flags.into();
+		self.flags |= flags.into();
 		self
 	}
 }
@@ -82,6 +82,6 @@ impl<C: Client> AddAssign<ActionProducts<C>> for ActionProducts<C> {
 	#[allow(clippy::suspicious_op_assign_impl)]
 	fn add_assign(&mut self, rhs: ActionProducts<C>) {
 		self.cmds.extend(rhs.cmds);
-		self.dirty |= rhs.dirty;
+		self.flags |= rhs.flags;
 	}
 }

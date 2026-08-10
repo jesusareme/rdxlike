@@ -14,6 +14,13 @@ pub struct MiddlewareStore<C: Client> {
     reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
 }
 
+#[cfg(test)]
+impl<C: Client> MiddlewareStore<C> {
+    pub fn funs(&self) -> &Vec<Box<dyn ChainableMiddleware<C>>> {
+        &self.funs
+    }
+}
+
 pub struct Next<'n, C: Client> {
     remaining:  &'n mut [Box<dyn ChainableMiddleware<C>>],
     reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,

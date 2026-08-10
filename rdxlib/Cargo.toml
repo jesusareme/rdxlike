@@ -7,3 +7,6 @@ edition = "2024"
 tracing = "0.1"
 enumset = "1.1"
 uuid = "1.24"
+
+[dev-dependencies]
+rstest = "0.26"

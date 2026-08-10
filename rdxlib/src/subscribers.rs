@@ -1,33 +1,39 @@
 use crate::Client;
 use crate::error::InitError;
+use crate::primitives::{OneSlotSender, one_slot_channel};
 use crate::subscribers::ComparableResult::Comparable;
 use enumset::EnumSet;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::sync::mpsc::Sender;
-use std::sync::mpsc;
 use std::thread;
 use std::thread::JoinHandle;
 use tracing::debug;
 use uuid::Uuid;
-use crate::primitives::{one_slot_channel, OneSlotSender};
 
 #[derive(Debug)]
 pub enum SubscriberError {
 	MissingState,
-	UnableToNotifySubscriber,
+	UnableToNotifySubscriber(Box<dyn Error + 'static>),
 }
+
 impl Display for SubscriberError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		match self {
 			SubscriberError::MissingState => write!(f, "Missing required state."),
-			SubscriberError::UnableToNotifySubscriber => {
+			SubscriberError::UnableToNotifySubscriber(_) => {
 				write!(f, "Unable to notify subscriber.")
 			}
 		}
 	}
 }
-impl Error for SubscriberError {}
+impl Error for SubscriberError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match self {
+			SubscriberError::MissingState => None,
+			SubscriberError::UnableToNotifySubscriber(source) => Some(source.as_ref())
+		}
+	}
+}
 
 pub trait Subscriber {
 	type State;
@@ -150,7 +156,7 @@ impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> Subscriber 
 			let slice = VT::slice(new_state, self.id)?;
 			self.sender
 				.send(slice)
-				.map_err(|_| SubscriberError::UnableToNotifySubscriber)?;
+				.map_err(|source| SubscriberError::UnableToNotifySubscriber(Box::from(source)))?;
 		}
 		Ok(())
 	}
