@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::{debug, error, warn};
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq)]
 struct Slot<T> {
     latest: Option<T>,
     ended: bool,
@@ -27,7 +27,7 @@ impl<T> Default for Slot<T> {
 }
 
 impl<T> Slot<T> {
-    pub fn is_content_available(&self) -> bool {
+    fn is_content_available(&self) -> bool {
         matches!(self.latest, Some(_)) || self.ended
     }
 }
