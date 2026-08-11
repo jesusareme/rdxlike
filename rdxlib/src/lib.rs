@@ -588,10 +588,13 @@ mod tests {
             CmdProduct::Direct(action),
         )));
 
-        let flag_ops: Vec<_> = op_witness.borrow().iter().cloned()
+        let flag_ops: Vec<_> = op_witness
+            .borrow()
+            .iter()
+            .cloned()
             .filter_map(|op| {
                 if let Interested(flags) = op {
-                    return Some(flags)
+                    return Some(flags);
                 }
                 None
             })
