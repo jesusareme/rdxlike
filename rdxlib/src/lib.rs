@@ -89,6 +89,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
                     let products = (self.runtime_reducer)(runtime_action);
                     if let Some(subscriber) = products.subscriber {
                         self.subscribers.push(subscriber);
+                        dirty = EnumSet::all();
                     }
                     pending.extend(products.actions.into_iter().map(Into::into));
                 }
@@ -638,7 +639,7 @@ mod tests {
         runtime.process_message(Message::Runtime(TestRuntimeAction::CreateSubscriber(subscriber)));
 
         assert_eq!(runtime.subscribers.len(), 1);
-        assert_eq!(*witness_op.read().unwrap(), vec![Active, Interested(EnumSet::empty()), Notify(vec![])]);
+        assert_eq!(*witness_op.read().unwrap(), vec![Active, Interested(EnumSet::all()), Notify(vec![])]);
     }
 
     #[rstest]
