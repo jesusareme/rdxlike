@@ -177,20 +177,11 @@ mod tests {
 
     struct TestClient;
     impl Client for TestClient {
-        type State = WitnessState;
+        type State = Vec<TestAction>;
         type Action = TestAction;
         type RuntimeAction = TestRuntimeAction;
         type Flag = TestFlag;
         type ServiceCommand = TestServiceCommand;
-    }
-
-    struct WitnessServices {
-        called: Rc<Cell<u32>>,
-    }
-
-    #[derive(Debug, PartialEq, Clone)]
-    struct WitnessState {
-        called: Vec<TestAction>,
     }
 
     #[derive(Debug, PartialEq, Clone)]
@@ -239,9 +230,10 @@ mod tests {
     #[derive(Debug, PartialEq, Clone)]
     struct TestServiceCommand;
     impl EnvironmentCommand for TestServiceCommand {
-        type Environment = WitnessServices;
+        type Environment = Rc<Cell<u32>>;
+
         fn process(self, env: &mut Self::Environment) {
-            env.called.update(|c| c + 1)
+            env.update(|c| c + 1)
         }
     }
 
@@ -263,7 +255,7 @@ mod tests {
     impl ChainableMiddleware<TestClient> for WitnessMiddleware {
         fn execute(
             &mut self,
-            state: &mut WitnessState,
+            state: &mut Vec<TestAction>,
             action: TestAction,
             mut next: Next<TestClient>,
         ) -> ActionProducts<TestClient> {
@@ -290,7 +282,7 @@ mod tests {
     #[derive(PartialEq, Debug, Clone)]
     enum WitnessSubscriberChecks {
         Interested(EnumSet<TestFlag>),
-        Notify(WitnessState),
+        Notify(Vec<TestAction>),
         Active,
     }
     use crate::cmd::AsyncTask;
@@ -311,7 +303,7 @@ mod tests {
     }
 
     impl Subscriber for WitnessSubscriber {
-        type State = WitnessState;
+        type State = Vec<TestAction>;
         type Flag = TestFlag;
 
         fn notify(&mut self, new_state: &Self::State) -> Result<(), SubscriberError> {
@@ -347,16 +339,16 @@ mod tests {
         (MessageSender::new(sender), receiver)
     }
 
-    fn witness_reducer(state: &mut WitnessState, action: TestAction) -> ActionProducts<TestClient> {
-        state.called.push(action);
+    fn witness_reducer(state: &mut Vec<TestAction>, action: TestAction) -> ActionProducts<TestClient> {
+        state.push(action);
         ActionProducts::none()
     }
 
     fn flags_producing_reducer(
-        state: &mut WitnessState,
+        state: &mut Vec<TestAction>,
         action: TestAction,
     ) -> ActionProducts<TestClient> {
-        state.called.push(action.clone());
+        state.push(action.clone());
         let (cmds, flags) = match action {
             CmdGeneratingAction(_, CmdProduct::Direct(actions)) => {
                 (vec![Cmd::Direct(actions)], EnumSet::empty())
@@ -368,10 +360,10 @@ mod tests {
     }
 
     fn cmd_producing_reducer(
-        state: &mut WitnessState,
+        state: &mut Vec<TestAction>,
         action: TestAction,
     ) -> ActionProducts<TestClient> {
-        state.called.push(action.clone());
+        state.push(action.clone());
 
         let cmds = match action {
             BasicAction(_) => vec![],
@@ -393,10 +385,10 @@ mod tests {
     }
 
     fn all_dirty_flags_reducer(
-        state: &mut WitnessState,
+        state: &mut Vec<TestAction>,
         action: TestAction,
     ) -> ActionProducts<TestClient> {
-        state.called.push(action);
+        state.push(action);
         ActionProducts {
             cmds: vec![],
             flags: EnumSet::all(),
@@ -422,8 +414,8 @@ mod tests {
     }
 
     #[fixture]
-    fn state() -> WitnessState {
-        WitnessState { called: vec![] }
+    fn state() -> Vec<TestAction> {
+        vec![]
     }
 
     #[fixture]
@@ -431,13 +423,11 @@ mod tests {
         #[default(witness_reducer)] reducer: Reducer<TestClient>,
         #[default(empty_runtime_reducer)] runtime_reducer: RuntimeReducer<TestClient>,
         sender_receiver: MessagingPair,
-        state: WitnessState,
+        state: Vec<TestAction>,
     ) -> RuntimeConfig<TestClient, WitnessJobDispatcher> {
         let (messages_tx, messages_rx) = sender_receiver;
         RuntimeConfig {
-            services: WitnessServices {
-                called: Rc::new(Cell::new(0)),
-            },
+            services: Rc::new(Cell::new(0)),
             state,
             middlewares: vec![],
             reducer,
@@ -463,7 +453,7 @@ mod tests {
         runtime.process_message(Action(BasicAction("basic")));
 
         assert_eq!(*witness.borrow(), vec![BasicAction("basic")]);
-        assert_eq!(runtime.state.called, vec![BasicAction("basic")]);
+        assert_eq!(runtime.state, vec![BasicAction("basic")]);
     }
 
     #[rstest]
@@ -483,12 +473,12 @@ mod tests {
         ));
         runtime.process_message(message);
 
-        assert_eq!(runtime.state.called.len(), 5);
-        assert_matches!(runtime.state.called[0], CmdGeneratingAction("initial", _));
-        assert_matches!(runtime.state.called[1], BasicAction("basic1"));
-        assert_matches!(runtime.state.called[2], CmdGeneratingAction("second", _));
-        assert_matches!(runtime.state.called[3], BasicAction("basic2"));
-        assert_matches!(runtime.state.called[4], BasicAction("basic3"));
+        assert_eq!(runtime.state.len(), 5);
+        assert_matches!(runtime.state[0], CmdGeneratingAction("initial", _));
+        assert_matches!(runtime.state[1], BasicAction("basic1"));
+        assert_matches!(runtime.state[2], CmdGeneratingAction("second", _));
+        assert_matches!(runtime.state[3], BasicAction("basic2"));
+        assert_matches!(runtime.state[4], BasicAction("basic3"));
     }
 
     #[rstest]
@@ -508,8 +498,8 @@ mod tests {
         ));
         runtime.process_message(message);
 
-        assert_eq!(runtime.state.called.len(), 1);
-        assert_matches!(runtime.state.called[0], CmdGeneratingAction("initial", _));
+        assert_eq!(runtime.state.len(), 1);
+        assert_matches!(runtime.state[0], CmdGeneratingAction("initial", _));
 
         assert_eq!(
             runtime
@@ -547,8 +537,8 @@ mod tests {
 
         runtime.process_message(message);
 
-        assert_eq!(runtime.state.called.len(), 1);
-        assert_matches!(runtime.state.called[0], CmdGeneratingAction("async", _));
+        assert_eq!(runtime.state.len(), 1);
+        assert_matches!(runtime.state[0], CmdGeneratingAction("async", _));
 
         assert_eq!(job_witness.get(), 1);
         assert_eq!(
@@ -571,7 +561,7 @@ mod tests {
     fn env_cmd_should_execute_on_environment_send_result(
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
-        let services_witness = config.services.called.clone();
+        let services_witness = config.services.clone();
         let mut runtime = Runtime::new(config);
         let message = Action(CmdGeneratingAction(
             "services",
@@ -582,8 +572,8 @@ mod tests {
 
         assert_eq!(services_witness.get(), 1);
 
-        assert_eq!(runtime.state.called.len(), 1);
-        assert_matches!(runtime.state.called[0], CmdGeneratingAction("services", _));
+        assert_eq!(runtime.state.len(), 1);
+        assert_matches!(runtime.state[0], CmdGeneratingAction("services", _));
 
         assert_eq!(
             runtime
@@ -646,7 +636,7 @@ mod tests {
         runtime.process_message(Message::Runtime(TestRuntimeAction::CreateSubscriber(subscriber)));
 
         assert_eq!(runtime.subscribers.len(), 1);
-        assert_eq!(*witness_op.read().unwrap(), vec![Active, Interested(EnumSet::empty()), Notify(WitnessState { called: vec![] })]);
+        assert_eq!(*witness_op.read().unwrap(), vec![Active, Interested(EnumSet::empty()), Notify(vec![])]);
     }
 
     #[rstest]
@@ -660,14 +650,14 @@ mod tests {
 
         let mut executed_actions = resulting_actions;
         executed_actions.push(BasicAction("3"));
-        assert_eq!(runtime.state.called, executed_actions);
+        assert_eq!(runtime.state, executed_actions);
     }
 
     #[rstest]
     #[case::active_and_interested(
         true,
         true,
-        vec![Active, Interested(EnumSet::<TestFlag>::all()), Notify(WitnessState { called: vec![BasicAction("basic")] })]
+        vec![Active, Interested(EnumSet::<TestFlag>::all()), Notify(vec![BasicAction("basic")])]
     )]
     #[case::inactive(false, true, vec![Active])]
     #[case::not_interested(true, false, vec![Active, Interested(EnumSet::<TestFlag>::all())])]
