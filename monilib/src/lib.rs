@@ -138,7 +138,7 @@ impl MoniLib {
                 clock: shared_clock,
             };
             match runtime::new(config) {
-                Ok(mut runtime) => {
+                Ok(runtime) => {
                     if ready_tx.send(Ok(())).is_err() {
                         error!("Error while trying to response back after successful runtime init");
                         return;
