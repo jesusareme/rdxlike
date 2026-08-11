@@ -14,21 +14,21 @@ use tracing::{debug, error, warn};
 #[derive(PartialEq)]
 struct Slot<T> {
     latest: Option<T>,
-    ended: bool,
+    senders: usize,
 }
 
 impl<T> Default for Slot<T> {
     fn default() -> Self {
         Slot {
             latest: None,
-            ended: false,
+            senders: 1,
         }
     }
 }
 
 impl<T> Slot<T> {
     fn is_content_available(&self) -> bool {
-        matches!(self.latest, Some(_)) || self.ended
+        matches!(self.latest, Some(_)) || self.senders == 0
     }
 }
 
@@ -39,6 +39,15 @@ struct OneSlotCore<T> {
 
 pub struct OneSlotSender<T> {
     core: Arc<OneSlotCore<T>>,
+}
+
+impl<T> Clone for OneSlotSender<T> {
+    fn clone(&self) -> Self {
+        self.core.mutex.lock().unwrap().senders += 1;
+        OneSlotSender {
+            core: Arc::clone(&self.core),
+        }
+    }
 }
 
 impl<T: Send> OneSlotSender<T> {
@@ -58,7 +67,7 @@ impl<T: Send> OneSlotSender<T> {
 impl<T> Drop for OneSlotSender<T> {
     fn drop(&mut self) {
         _ = self.core.mutex.lock().and_then(|mut guard| {
-            guard.ended = true;
+            guard.senders -= 1;
             drop(guard);
             self.core.cvar.notify_all();
             Ok(())
@@ -97,7 +106,7 @@ impl<T> OneSlotReceiver<T> {
         let mut guard = self.core.mutex.lock().map_err(|_| RecvError)?;
         guard.latest.take().map_or_else(
             || {
-                if guard.ended {
+                if guard.senders == 0 {
                     Err(TryRecvError::Disconnected)
                 } else {
                     Err(TryRecvError::Empty)
@@ -133,29 +142,64 @@ pub fn one_slot_channel<T: Send>() -> (OneSlotSender<T>, OneSlotReceiver<T>) {
 #[cfg(test)]
 mod tests_one_slot_channel {
     use super::one_slot_channel;
-    use std::sync::mpsc;
-    use std::sync::mpsc::TryRecvError;
-    use std::thread;
+    use crate::primitives::tests_one_slot_channel::TimedOutTestState::{Finished, Ready};
+    use std::sync::mpsc::{RecvError, TryRecvError};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
+    use std::thread;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
-    const WAIT: Duration = Duration::from_millis(100);
+
+    enum TimedOutTestState<R> {
+        Preparing,
+        Ready,
+        Finished(R),
+    }
+    impl<R> TimedOutTestState<R> {
+        pub fn is_finished(&self) -> bool {
+            matches!(self, Finished(_))
+        }
+
+        pub fn is_ready(&self) -> bool {
+            matches!(self, Ready)
+        }
+    }
 
     fn execute_with_timeout<J, P, R>(timeout: Duration, job: J, prepare: P) -> R
     where
         J: FnOnce() -> R + Send + 'static,
         P: FnOnce() + Send + 'static,
-        R: Send + 'static,
+        R: Clone + Send + 'static,
     {
-        let (result_sender, result_receiver) = mpsc::channel::<R>();
-        thread::spawn(move || {
-            thread::spawn(move || _ = result_sender.send(job()));
+        let sync = Arc::new((Mutex::new(TimedOutTestState::Preparing), Condvar::new()));
+        let sync_remote = sync.clone();
 
-            prepare();
+        thread::spawn(move || {
+            let mut guard = sync_remote
+                .1
+                .wait_while(sync_remote.0.lock().unwrap(), |s| !s.is_ready())
+                .expect("we should not err under normal test conditions");
+            let result = job();
+            *guard = Finished(result);
+            sync_remote.1.notify_all();
         });
-        result_receiver
-            .recv_timeout(timeout)
-            .expect("Result is never received")
+
+        prepare();
+        *sync.0.lock().unwrap() = Ready;
+        sync.1.notify_all();
+        match sync
+            .1
+            .wait_timeout_while(sync.0.lock().unwrap(), timeout, |s| !s.is_finished())
+        {
+            Ok((guard, _result)) => {
+                if let Finished(ref value) = *guard {
+                    value.clone()
+                } else {
+                    panic!("Test time-out");
+                }
+            }
+            Err(_) => panic!("Test job panicked"),
+        }
     }
 
     #[test]
@@ -189,25 +233,31 @@ mod tests_one_slot_channel {
     }
 
     #[test]
-    fn sent_items_should_awake_on_receive_and_iter_ends() {
-        let (sender, receiver) = one_slot_channel();
+    fn iter_should_retrieve_results_and_end_when_no_sender_exists() {
+        let (sender, mut receiver) = one_slot_channel();
         let value1 = 1;
         let value2 = 2;
+        let value3 = 3;
 
-        let results: Vec<i32> = execute_with_timeout(
-            TIMEOUT,
-            move || receiver.collect(),
-            move || {
-                thread::sleep(WAIT);
-                sender.send(value1).expect("Send should not fail");
-                thread::sleep(WAIT);
-                sender.send(value2).expect("Send should not fail");
-                thread::sleep(WAIT);
-                drop(sender);
-            },
-        );
+        let sender2 = sender.clone();
 
-        assert_eq!(results, vec![value1, value2]);
+        let mut results = vec![];
+
+        sender.send(value1).expect("Send should not fail here");
+        results.push(receiver.next().unwrap());
+        sender.send(value2).expect("Send should not fail here");
+        results.push(receiver.next().unwrap());
+
+        drop(sender);
+
+        sender2.send(value3).expect("Send should not fail here");
+        results.push(receiver.next().unwrap());
+
+        drop(sender2);
+
+        assert_eq!(receiver.next(), None);
+
+        assert_eq!(results, vec![value1, value2, value3]);
     }
 
     #[test]
@@ -222,10 +272,7 @@ mod tests_one_slot_channel {
             execute_with_timeout(TIMEOUT, move || (receiver.recv(), receiver.recv()), || {});
 
         assert_eq!(result1, Ok(value));
-        assert!(
-            result2.is_err(),
-            "Second receive intent should return error"
-        );
+        assert_eq!(result2, Err(RecvError));
     }
 
     #[test]
@@ -268,21 +315,47 @@ mod tests_one_slot_channel {
     }
 
     #[test]
+    fn cloned_senders_should_disconnect_only_after_the_last_one_drops() {
+        let (sender, receiver) = one_slot_channel::<i32>();
+        let sender2 = sender.clone();
+        let sender3 = sender2.clone();
+        let value = 1;
+
+        drop(sender);
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+
+        sender3.send(value).expect("Send should not fail");
+        drop(sender3);
+
+        assert_eq!(receiver.try_recv(), Ok(value));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+
+        let result = execute_with_timeout(
+            TIMEOUT,
+            move || receiver.recv(),
+            move || {
+                drop(sender2);
+            },
+        );
+
+        assert_eq!(result, Err(RecvError));
+    }
+
+    #[test]
     fn sent_item_should_be_received_one_receiver() {
         let (sender, receiver) = one_slot_channel::<i32>();
         let receiver2 = receiver.clone();
         let value1 = 1;
         let value2 = 2;
 
+        let _sender_keep_alive = sender.clone();
+
         let result = execute_with_timeout(
             TIMEOUT,
-            move || {
-                [receiver.try_recv(), receiver2.try_recv()]
-            },
+            move || [receiver.try_recv(), receiver2.try_recv()],
             move || {
                 sender.send(value1).expect("Send should not fail");
                 sender.send(value2).expect("Send should not fail");
-                thread::sleep(WAIT);
             },
         );
 
