@@ -296,7 +296,7 @@ mod tests {
         fn default() -> Self {
             WitnessSubscriber {
                 name: "",
-                operations: Arc::new(RwLock::new(vec![])),
+                operations: OperationsLog::default(),
                 should_be_interested: true,
                 should_be_active: true,
                 should_notify_error: false,
@@ -429,13 +429,13 @@ mod tests {
     ) -> RuntimeConfig<TestClient, WitnessJobDispatcher> {
         let (messages_tx, messages_rx) = sender_receiver;
         RuntimeConfig {
-            services: Rc::new(Cell::new(0)),
+            services: Default::default(),
             state,
             middlewares: vec![],
             reducer,
             runtime_reducer,
             jobs_dispatcher: WitnessJobDispatcher {
-                called: Rc::new(Cell::new(0)),
+                called: Default::default(),
             },
             messages_rx,
             messages_tx,
@@ -446,7 +446,7 @@ mod tests {
     fn received_action_should_call_middlewares_and_reducer(
         mut config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
-        let witness = Rc::new(RefCell::new(vec![]));
+        let witness = MessageWitness::default();
         config.middlewares.push(Box::new(WitnessMiddleware {
             messages: witness.clone(),
         }));
