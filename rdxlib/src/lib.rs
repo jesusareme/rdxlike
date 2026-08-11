@@ -264,10 +264,12 @@ mod tests {
         }
     }
 
+    type OperationsLog = Arc<RwLock<Vec<WitnessSubscriberChecks>>>;
+
     #[derive(Debug)]
     struct WitnessSubscriber {
         name: &'static str,
-        operations: Arc<RwLock<Vec<WitnessSubscriberChecks>>>,
+        operations: OperationsLog,
         should_be_interested: bool,
         should_be_active: bool,
         should_notify_error: bool,
