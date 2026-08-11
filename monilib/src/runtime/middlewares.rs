@@ -120,7 +120,10 @@ mod tests {
 
     #[rstest]
     #[case::clock(stuck_clock())]
-    #[case::logger(MoniMiddleware::Logger { prev: true, post: true })]
+    #[case::logger_both(MoniMiddleware::Logger { prev: true, post: true })]
+    #[case::logger_prev_only(MoniMiddleware::Logger { prev: true, post: false })]
+    #[case::logger_post_only(MoniMiddleware::Logger { prev: false, post: true })]
+    #[case::logger_none(MoniMiddleware::Logger { prev: false, post: false })]
     fn middleware_should_call_next_and_sink_products(#[case] middleware: MoniMiddleware) {
         let next = FakeNext::new();
         let calls = next.calls.clone();
