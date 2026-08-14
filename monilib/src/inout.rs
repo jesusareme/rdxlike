@@ -61,7 +61,7 @@ pub struct PlainListItem {
 }
 
 #[data]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MoniExpense {
     pub date: Option<SystemTime>,
     pub amount: i64,
@@ -100,7 +100,7 @@ fn validated_date(date: SystemTime, clock: &dyn ClockSource) -> Result<Zoned, Mo
     Ok(date)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExpenseAddIntent {
     pub date: Option<Zoned>,
     pub amount: i64,

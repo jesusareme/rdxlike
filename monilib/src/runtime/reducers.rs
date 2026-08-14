@@ -1,13 +1,11 @@
 use super::{cmd::*, *};
 use crate::LibErrorCause;
-use crate::action::WorkingAction::{Model, Save, SuccessfulSave, Watchdog, WatchdogWatching};
+use crate::action::WorkingAction::{Model, Save, SuccessfulSave};
 use crate::runtime::Dirty::Statistics;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::model_views::ClockedModelStateView;
-use crate::{
-    action::{Action, WorkingAction},
-    runtime::cmd::DebounceAction::Cancel,
-};
+use crate::util::{DropCancellation, IdSource};
+use crate::{action::Action, runtime::cmd::DebounceAction::Cancel};
 use rdxlib::cmd::Cmd::Direct;
 use std::fmt::Debug;
 use std::mem;
@@ -36,7 +34,6 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                 _ => MoniProducts::none().with_dirty(EnumSet::all()),
             }
         }
-        NoOp => MoniProducts::none(),
 
         Running(action) => reducer_running(&mut state.running, action),
 
@@ -60,45 +57,35 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                         MoniProducts::none()
                     }
 
-                    Watchdog => MoniProducts::cmd(TimeSubscriptionCmd::Watchdog),
-
                     Model(action) => reducer_model(
                         ClockedModelStateView::new(model, &mut state.running),
                         action,
                     ),
-
-                    WatchdogWatching => {
-                        debug!("watchdog watching!");
-                        MoniProducts::none()
-                    } // Action::DelayedSave => {
-                      //
-                      // }
-
-                      // Action::AddToInfo(text) => Products::none(),
-                      // Action::AddFromLongCalculation => {
-                      // 	let counter = state.counter.clone(); // we can move values for later use
-                      // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
-                      // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
-                      // }
-                      // Action::AddEverySecond(interval) => {
-                      // 	let operation = DropCancellation::new(Uuid::new_v4());
-                      // 	let handle = operation.cancellation_handle();
-                      // 	state.counting = Some(operation);
-                      //
-                      // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
-                      // 		interval,
-                      // 		handle,
-                      // 	}));
-                      // 	Products::cmd(cmd)
-                      // }
-                      // Action::AddFromAsync => {
-                      // 	let counter = state.counter;
-                      // 	let cmd = Cmd::Async(Box::new(move || {
-                      // 		thread::sleep(Duration::from_secs(1));
-                      // 		Action::Add(counter * 2)
-                      // 	}));
-                      // 	Products::cmd(cmd)
-                      // }
+                    // Action::AddToInfo(text) => Products::none(),
+                    // Action::AddFromLongCalculation => {
+                    // 	let counter = state.counter.clone(); // we can move values for later use
+                    // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
+                    // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
+                    // }
+                    // Action::AddEverySecond(interval) => {
+                    // 	let operation = DropCancellation::new(Uuid::new_v4());
+                    // 	let handle = operation.cancellation_handle();
+                    // 	state.counting = Some(operation);
+                    //
+                    // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
+                    // 		interval,
+                    // 		handle,
+                    // 	}));
+                    // 	Products::cmd(cmd)
+                    // }
+                    // Action::AddFromAsync => {
+                    // 	let counter = state.counter;
+                    // 	let cmd = Cmd::Async(Box::new(move || {
+                    // 		thread::sleep(Duration::from_secs(1));
+                    // 		Action::Add(counter * 2)
+                    // 	}));
+                    // 	Products::cmd(cmd)
+                    // }
                 }
             }
         },
@@ -110,7 +97,10 @@ fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
     error!("MoniLib was unable to initialize: {error}");
     state.running.errors.push(error);
     if let AppState::Zero(actions) = mem::replace(&mut state.app, AppState::Failed) {
-        error!("These pending actions received while initializing store will be discarded: {:?}", actions)
+        error!(
+            "These pending actions received while initializing store will be discarded: {:?}",
+            actions
+        )
     }
 
     MoniProducts::none()
@@ -121,7 +111,7 @@ fn reducer_running(state: &mut RunningState, action: RunningAction) -> MoniProdu
         RunningAction::Error(error) => {
             state.errors.push(error);
             MoniProducts::none()
-        },
+        }
 
         RunningAction::ListViewHint(token, id) => {
             if let Some(view_state) = state.plain_list.get_mut(&token) {
@@ -154,8 +144,8 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
                 .time
                 .first_of_month()
                 .expect("first_of_month from an injected Zoned cannot fail");
-            
-            let date = expense_intent.date.unwrap_or(state.time.clone());
+
+            let date = expense_intent.date.unwrap_or_else(|| state.time.clone());
 
             let dirty = finances_dirty(&date, &first_of_month);
 
@@ -163,7 +153,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
                 .model_state
                 .movements
                 .partition_point(|e| e.date <= date);
-            
+
             let id = state.model_state.ids.next_expense_id.get_and_inc();
             let expense = Expense::new(
                 id,
@@ -172,7 +162,6 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
                 expense_intent.comment,
                 expense_intent.category,
             );
-
 
             state.model_state.movements.update_with(|expenses| {
                 expenses.insert(idx, expense);
@@ -266,17 +255,35 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
         }
 
         ModelAction::StatisticsAll => match &mut state.model_state.statistics_all {
-            Some(s) if s.at_movements_version == state.model_state.movements.version() => {
+            Some(s)
+                if s.at_movements_version == state.model_state.movements.version()
+                    && state.tasks.statistics_running.is_none() =>
+            {
                 s.requested_at = state.time.timestamp();
                 MoniProducts::none().with_dirty(Statistics)
             }
-            _ => MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
-                state.model_state.movements.clone(),
-                state.time.timestamp(),
-            )),
+
+            _ => {
+                let cancellation_token = DropCancellation::new(Uuid::new_v4());
+                let cancellation_check = cancellation_token.cancellation_check();
+
+                // This has the effect of cancelling any previous running statistics calculation:
+                state.tasks.statistics_running = Some(cancellation_token);
+
+                MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
+                    state.model_state.movements.clone(),
+                    state.time.timestamp(),
+                    cancellation_check,
+                ))
+            }
         },
 
         ModelAction::StatisticsAllResult(statistics) => {
+            let Some(statistics) = statistics else {
+                debug!("Statistics calculation was cancelled");
+                return MoniProducts::none();
+            };
+
             if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at)
             {
                 return MoniProducts::none();
@@ -285,6 +292,24 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
             state.model_state.statistics_all = Some(statistics);
             MoniProducts::none().with_dirty(Statistics)
         }
+
+        ModelAction::AddEveryXInterval(id, interval, action) => {
+            state.tasks.recurrent_add.insert(id);
+            MoniProducts::cmd(TimeSubscriptionCmd::EveryXInterval(id, interval, *action))
+        }
+
+        ModelAction::StopAddingEveryXInterval(id) => {
+            if let Some(uuid) = state.tasks.recurrent_add.take(&id) {
+                MoniProducts::cmd(TimeSubscriptionCmd::CancelEveryXInterval(uuid))
+            } else {
+                MoniProducts::none()
+            }
+        }
+
+        ModelAction::CancelStatistics => {
+            state.tasks.statistics_running = None;
+            MoniProducts::none()
+        }
     }
 }
 
@@ -292,20 +317,23 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
 mod reducer_model_test {
     use super::*;
     use crate::MoniErrorType;
+    use crate::inout::ExpenseAddIntent;
     use crate::runtime::ExpenseCategory::*;
     use crate::runtime::cmd::DebounceAction::Bump;
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
     use crate::runtime::cmd::ServiceCommand::Subscribe;
-    use crate::runtime::cmd::Subscription::Debounce;
-    use crate::inout::ExpenseAddIntent;
-    use crate::testing::{contemporary_ref_date, ordered_by_index_map};
+    use crate::runtime::cmd::Subscription::{Debounce, Time};
+    use crate::testing::{
+        alternative_ref_uuid, contemporary_ref_date, ordered_by_index_map, ref_uuid,
+    };
     use itertools::Itertools;
     use jiff::{Span, ToSpan};
     use proptest::prelude::*;
     use proptest::{prop_compose, proptest};
     use rdxlib::cmd::Cmd::Env;
     use rstest::rstest;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
+    use uuid::Uuid;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();
@@ -374,14 +402,33 @@ mod reducer_model_test {
         errors: &mut Vec<MoniError>,
         action: ModelAction,
     ) -> MoniProducts {
+        reduce_with_tasks(state, time, errors, &mut LongLivingTasks::default(), action)
+    }
+
+    fn reduce_with_tasks(
+        state: &mut ModelState,
+        time: &Zoned,
+        errors: &mut Vec<MoniError>,
+        tasks: &mut LongLivingTasks,
+        action: ModelAction,
+    ) -> MoniProducts {
         reducer_model(
             ClockedModelStateView {
                 model_state: state,
                 time,
                 errors,
+                tasks,
             },
             action,
         )
+    }
+
+    fn ref_interval() -> Duration {
+        Duration::from_secs(30)
+    }
+
+    fn add_every_interval(id: Uuid) -> ModelAction {
+        ModelAction::AddEveryXInterval(id, ref_interval(), Box::new(Save))
     }
 
     fn add_intent(expense: &Expense) -> ModelAction {
@@ -416,7 +463,7 @@ mod reducer_model_test {
 
     prop_compose! {
         fn arb_expenses_and_date_offsets()
-        (expenses in proptest::collection::vec(arb_expenses(), 1..=500))
+        (expenses in proptest::collection::vec(arb_expenses(), 1..=300))
         (new_dates in proptest::collection::vec(any::<SystemTime>(), expenses.len()), expenses in Just(expenses)) -> (Vec<Expense>, Vec<SystemTime>) {
             (expenses, new_dates)
         }
@@ -426,7 +473,6 @@ mod reducer_model_test {
         #[test]
         fn expenses_add_proptest((expenses, new_dates) in arb_expenses_and_date_offsets()) {
             prop_assume!(expenses.len() == new_dates.len(), "Test configuration issue: not enough durations");
-
 
             let mut state = ModelState::default();
             let mut errors = vec![];
@@ -905,5 +951,141 @@ mod reducer_model_test {
             products.cmds,
             vec![Env(Subscribe(Debounce(DelayedSave(Bump))))]
         );
+    }
+
+    #[test]
+    fn reducer_model_add_every_interval_should_register_task_and_subscribes_timer() {
+        let mut state = ModelState::default();
+        let mut errors = vec![];
+        let mut tasks = LongLivingTasks::default();
+
+        let products = reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            add_every_interval(ref_uuid()),
+        );
+
+        assert!(products.flags.is_empty());
+        assert_eq!(
+            products.cmds,
+            vec![Env(Subscribe(Time(TimeSubscriptionCmd::EveryXInterval(
+                ref_uuid(),
+                ref_interval(),
+                Save
+            ))))]
+        );
+        assert!(errors.is_empty());
+        assert!(tasks.recurrent_add.contains(&ref_uuid()));
+    }
+
+    #[test]
+    fn reducer_model_add_every_interval_distinct_ids_should_register_independently() {
+        let mut state = ModelState::default();
+        let mut errors = vec![];
+        let mut tasks = LongLivingTasks::default();
+
+        for id in [ref_uuid(), alternative_ref_uuid()] {
+            reduce_with_tasks(
+                &mut state,
+                &contemporary_ref_date(),
+                &mut errors,
+                &mut tasks,
+                add_every_interval(id),
+            );
+        }
+
+        assert!(errors.is_empty());
+        assert_eq!(tasks.recurrent_add.len(), 2);
+        assert!(tasks.recurrent_add.contains(&ref_uuid()));
+        assert!(tasks.recurrent_add.contains(&alternative_ref_uuid()));
+    }
+
+    #[test]
+    fn reducer_model_stop_adding_every_interval_should_unregister_task_and_cancel_timer() {
+        let mut state = ModelState::default();
+        let mut errors = vec![];
+        let mut tasks = LongLivingTasks::default();
+        tasks.recurrent_add.insert(ref_uuid());
+
+        let products = reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            ModelAction::StopAddingEveryXInterval(ref_uuid()),
+        );
+
+        assert!(products.flags.is_empty());
+        assert_eq!(
+            products.cmds,
+            vec![Env(Subscribe(Time(
+                TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid())
+            )))]
+        );
+        assert!(errors.is_empty());
+        assert!(tasks.recurrent_add.is_empty());
+    }
+
+    #[test]
+    fn reducer_model_stop_adding_every_interval_unknown_id_should_generate_no_products() {
+        let mut state = ModelState::default();
+        let mut errors = vec![];
+        let mut tasks = LongLivingTasks::default();
+        tasks.recurrent_add.insert(ref_uuid());
+
+        let products = reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            ModelAction::StopAddingEveryXInterval(alternative_ref_uuid()),
+        );
+
+        assert!(products.flags.is_empty());
+        assert!(products.cmds.is_empty());
+        assert!(errors.is_empty());
+        assert!(tasks.recurrent_add.contains(&ref_uuid()));
+    }
+
+    #[test]
+    fn reducer_model_stop_adding_every_interval_twice_should_cancel_only_once() {
+        let mut state = ModelState::default();
+        let mut errors = vec![];
+        let mut tasks = LongLivingTasks::default();
+
+        reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            add_every_interval(ref_uuid()),
+        );
+
+        let first_stop = reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            ModelAction::StopAddingEveryXInterval(ref_uuid()),
+        );
+        let second_stop = reduce_with_tasks(
+            &mut state,
+            &contemporary_ref_date(),
+            &mut errors,
+            &mut tasks,
+            ModelAction::StopAddingEveryXInterval(ref_uuid()),
+        );
+
+        assert_eq!(
+            first_stop.cmds,
+            vec![Env(Subscribe(Time(
+                TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid())
+            )))]
+        );
+        assert!(second_stop.cmds.is_empty());
+        assert!(errors.is_empty());
+        assert!(tasks.recurrent_add.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 mod timers;
-pub use timers::Timers;
+pub(crate) use timers::Timers;
 
 use super::{ModelState, MoniMessage, cmd::PersistenceCmd};
 use crate::MoniError;
@@ -37,7 +37,7 @@ impl Services {
     }
 }
 
-/// Service will most probably own the resources they need to execute actions, on its own thread.
+/// Services will most probably own the resources they need to execute actions, on their own thread.
 pub(crate) trait Service {
     type Action: Send + 'static;
     type Context: ?Sized;

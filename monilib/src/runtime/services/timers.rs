@@ -1,7 +1,11 @@
+use crate::MoniError;
 use crate::action::WorkingAction;
-use crate::runtime::cmd::{DebounceCmd, TimeSubscriptionCmd};
-use crate::util::{ClockSource};
+use crate::runtime::MoniMessage;
+use crate::runtime::cmd::{DebounceAction, DebounceCmd, TimeSubscriptionCmd};
+use crate::util::ClockSource;
+use rdxlib::util::MessageSend;
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU64;
 use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, mpsc};
@@ -9,11 +13,9 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tracing::debug;
-use rdxlib::util::MessageSend;
-use crate::MoniError;
-use crate::runtime::MoniMessage;
+use uuid::Uuid;
 
-pub struct Timers {
+pub(crate) struct Timers {
     tx: Sender<TimersMessage>,
     thread_handle: JoinHandle<()>,
 }
@@ -24,11 +26,14 @@ enum TimerType {
     Debounce,
 }
 
-pub struct TimerTask {
+type TimerOutcome = dyn Fn(u64) -> WorkingAction + Send;
+type TimerDuration = dyn Fn(u64) -> Duration + Send;
+
+pub(crate) struct TimerTask {
     pub id: TimerId,
-    outcome: fn(u64) -> WorkingAction,
+    outcome: Box<TimerOutcome>,
     timer_type: TimerType,
-    get_duration: fn(u64) -> Duration,
+    get_duration: Box<TimerDuration>,
 }
 
 pub enum TimersMessage {
@@ -42,11 +47,18 @@ struct TimerState {
     deadline: Instant,
 }
 
-#[derive(Debug)]
 struct TimerBehavior {
-    outcome: fn(u64) -> WorkingAction,
-    get_next_duration: fn(u64) -> Duration,
+    outcome: Box<TimerOutcome>,
+    get_next_duration: Box<TimerDuration>,
     timer_type: TimerType,
+}
+
+impl Debug for TimerBehavior {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TimerBehavior")
+            .field("timer_type", &self.timer_type)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -86,7 +98,9 @@ impl Timer {
     pub fn repeatable(mut self) -> Option<Self> {
         if let TimerType::Repeat(max) = self.behavior.timer_type {
             let next_count = self.state.count.saturating_add(1);
-            if let Some(max) = max && next_count >= u64::from(max) {
+            if let Some(max) = max
+                && next_count >= u64::from(max)
+            {
                 return None;
             }
             self.state.count = next_count;
@@ -102,7 +116,10 @@ impl Timer {
 }
 
 impl Timers {
-    pub fn new(action_tx: &impl MessageSend<Message=MoniMessage>, clock: &Arc<dyn ClockSource + Send + Sync>) -> Result<Self, MoniError> {
+    pub fn new(
+        action_tx: &impl MessageSend<Message = MoniMessage>,
+        clock: &Arc<dyn ClockSource + Send + Sync>,
+    ) -> Result<Self, MoniError> {
         let action_tx = action_tx.clone();
         let (tx, rx) = mpsc::channel();
         let clock_clone = Arc::clone(clock);
@@ -193,44 +210,45 @@ impl Timers {
         actions
     }
 
-    pub fn submit(&self, task: TimerTask) {
-        self.tx.send(TimersMessage::Bump(task)).unwrap();
-    }
-
-    pub fn remove(&self, task: TimerTask) {
-        self.tx.send(TimersMessage::Cancel(task.id)).unwrap();
+    pub fn send(&self, message: TimersMessage) {
+        self.tx.send(message).unwrap();
     }
 }
 
-#[derive(Eq, PartialEq, Hash, Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone)]
 pub enum TimerId {
-    Watchdog,
     DebounceSave,
+    RepeatedAction(Uuid),
 }
 
-impl From<TimeSubscriptionCmd> for TimerTask {
+impl From<TimeSubscriptionCmd> for TimersMessage {
     fn from(value: TimeSubscriptionCmd) -> Self {
         match value {
-            TimeSubscriptionCmd::Watchdog => TimerTask {
-                id: TimerId::Watchdog,
-                outcome: |_| WorkingAction::WatchdogWatching,
+            TimeSubscriptionCmd::EveryXInterval(id, interval, action) => TimersMessage::Bump(TimerTask {
+                id: TimerId::RepeatedAction(id),
+                outcome: Box::new(move |_| action.clone()),
                 timer_type: TimerType::Repeat(None),
-                get_duration: |_| Duration::from_secs(1),
-            },
-            TimeSubscriptionCmd::EveryXSeconds(_action) => todo!("recurrent add timer"),
+                get_duration: Box::new(move |_| interval),
+            }),
+            TimeSubscriptionCmd::CancelEveryXInterval(id) => {
+                TimersMessage::Cancel(TimerId::RepeatedAction(id))
+            }
         }
     }
 }
 
-impl From<DebounceCmd> for TimerTask {
+impl From<DebounceCmd> for TimersMessage {
     fn from(value: DebounceCmd) -> Self {
         match value {
-            DebounceCmd::DelayedSave(_) => TimerTask {
+            DebounceCmd::DelayedSave(DebounceAction::Bump) => TimersMessage::Bump(TimerTask {
                 id: TimerId::DebounceSave,
-                outcome: |_| WorkingAction::Save,
+                outcome: Box::new(|_| WorkingAction::Save),
                 timer_type: TimerType::Debounce,
-                get_duration: |_| Duration::from_secs(5),
-            },
+                get_duration: Box::new(|_| Duration::from_secs(5)),
+            }),
+            DebounceCmd::DelayedSave(DebounceAction::Cancel) => {
+                TimersMessage::Cancel(TimerId::DebounceSave)
+            }
         }
     }
 }
@@ -238,14 +256,14 @@ impl From<DebounceCmd> for TimerTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::StuckInstantClock;
+    use crate::testing::{StuckInstantClock, alternative_ref_uuid, ref_uuid};
     use rstest::{fixture, rstest};
 
     impl Default for TimerBehavior {
         fn default() -> Self {
             TimerBehavior {
-                outcome: |_| WorkingAction::Save,
-                get_next_duration: |_| Duration::from_nanos(1),
+                outcome: Box::new(|_| WorkingAction::Save),
+                get_next_duration: Box::new(|_| Duration::from_nanos(1)),
                 timer_type: TimerType::Debounce,
             }
         }
@@ -259,18 +277,18 @@ mod tests {
     fn debounce_task() -> TimerTask {
         TimerTask {
             id: TimerId::DebounceSave,
-            outcome: |_| WorkingAction::Save,
+            outcome: Box::new(|_| WorkingAction::Save),
             timer_type: TimerType::Debounce,
-            get_duration: |_| Duration::from_nanos(1),
+            get_duration: Box::new(|_| Duration::from_nanos(1)),
         }
     }
 
     fn repeat_task() -> TimerTask {
         TimerTask {
-            id: TimerId::Watchdog,
-            outcome: |_| WorkingAction::Save,
+            id: TimerId::RepeatedAction(ref_uuid()),
+            outcome: Box::new(|_| WorkingAction::Save),
             timer_type: TimerType::Repeat(Some(NonZeroU64::new(2).unwrap())),
-            get_duration: |_| Duration::from_nanos(1),
+            get_duration: Box::new(|_| Duration::from_nanos(1)),
         }
     }
 
@@ -291,10 +309,15 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn repeated_task_id() -> TimerId {
+        TimerId::RepeatedAction(ref_uuid())
+    }
+
     #[rstest]
     #[case::debounce(debounce_task(), TimerType::Debounce)]
     #[case::repeat(repeat_task(), TimerType::Repeat(Some(NonZeroU64::new(2).unwrap())))]
-    fn timer_initial_state(
+    fn timer_started_from_task_should_have_zero_count_and_first_deadline(
         clock: StuckInstantClock,
         #[case] task: TimerTask,
         #[case] expected_type: TimerType,
@@ -311,7 +334,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_debounce_type_bump_state_changed(clock: StuckInstantClock) {
+    fn timer_debounce_bumped_should_increment_count_and_reschedule(clock: StuckInstantClock) {
         let mut timer = debounce_timer(clock.now_instant());
         let expected_final_state = TimerState {
             count: 1,
@@ -324,7 +347,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_type_bump_state_changed(clock: StuckInstantClock) {
+    fn timer_repeat_bumped_should_reset_count_and_reschedule(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant() + Duration::from_nanos(1));
         timer.state = TimerState {
             count: 42,
@@ -342,13 +365,13 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_debounce_not_repeatable(clock: StuckInstantClock) {
+    fn timer_debounce_should_not_be_repeatable(clock: StuckInstantClock) {
         let timer = debounce_timer(clock.now_instant());
         assert!(timer.repeatable().is_none());
     }
 
     #[rstest]
-    fn timer_repeat_not_drained_repetitions_gets_repeatable(clock: StuckInstantClock) {
+    fn timer_repeat_with_remaining_repetitions_should_be_repeatable(clock: StuckInstantClock) {
         let timer = repeat_timer(clock.now_instant());
         let expected_final_state = TimerState {
             count: 1,
@@ -361,9 +384,9 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_get_next_duration_correctly_called(clock: StuckInstantClock) {
+    fn timer_repeat_repeated_should_reschedule_with_next_duration(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
-        timer.behavior.get_next_duration = |_| Duration::from_secs(42);
+        timer.behavior.get_next_duration = Box::new(|_| Duration::from_secs(42));
         let expected_final_state = TimerState {
             count: 1,
             deadline: clock.now_instant() + Duration::from_secs(42),
@@ -375,28 +398,28 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_action_outcome_correctly_called_according_to_state(clock: StuckInstantClock) {
+    fn timer_repeat_action_should_be_derived_from_repetition_count(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
-        timer.behavior.outcome = |repeat| {
+        timer.behavior.outcome = Box::new(|repeat| {
             if repeat % 2 == 0 {
                 WorkingAction::Save
             } else {
-                WorkingAction::Watchdog
+                WorkingAction::SuccessfulSave
             }
-        };
+        });
 
         assert_eq!(timer.action(), WorkingAction::Save);
 
         timer.state.count = 1;
-        assert_eq!(timer.action(), WorkingAction::Watchdog);
+        assert_eq!(timer.action(), WorkingAction::SuccessfulSave);
     }
 
     #[rstest]
     #[case::from_zero(0, 1)]
-    #[case::from_zero(1, 2)]
-    #[case(u64::MAX - 1, u64::MAX)]
+    #[case::from_one(1, 2)]
+    #[case::near_max(u64::MAX - 1, u64::MAX)]
     #[case::saturates_at_max(u64::MAX, u64::MAX)]
-    fn timer_repeat_infinite_is_always_repeatable(
+    fn timer_repeat_infinite_should_always_be_repeatable(
         clock: StuckInstantClock,
         #[case] start_count: u64,
         #[case] expected_count: u64,
@@ -413,7 +436,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timer_repeat_drained_repetitions_non_repeatable(clock: StuckInstantClock) {
+    fn timer_repeat_drained_repetitions_should_not_be_repeatable(clock: StuckInstantClock) {
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1; // we are on second repetition
 
@@ -421,15 +444,15 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_empty_gets_none() {
+    fn next_deadline_without_tasks_should_get_none() {
         let tasks: HashMap<TimerId, Timer> = HashMap::new();
         assert!(Timers::next_deadline(&tasks).is_none())
     }
 
     #[rstest]
-    fn next_deadline_one_gets_one(clock: StuckInstantClock) {
+    fn next_deadline_single_task_should_get_its_deadline(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
-        tasks.insert(TimerId::Watchdog, repeat_timer(clock.now_instant()));
+        tasks.insert(repeated_task_id, repeat_timer(clock.now_instant()));
 
         assert_eq!(
             Timers::next_deadline(&tasks),
@@ -438,20 +461,20 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_in_past_gets_one(clock: StuckInstantClock) {
+    fn next_deadline_already_passed_should_still_get_it(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let past_deadline = clock.now_instant() - Duration::from_nanos(1);
         let timer = repeat_timer(past_deadline);
-        tasks.insert(TimerId::Watchdog, timer);
+        tasks.insert(repeated_task_id, timer);
 
         assert_eq!(Timers::next_deadline(&tasks), Some(past_deadline))
     }
 
     #[rstest]
-    fn next_deadline_multiple_timers_gets_next(clock: StuckInstantClock) {
+    fn next_deadline_multiple_tasks_should_get_earliest(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let timer1 = repeat_timer(clock.now_instant() + Duration::from_secs(9));
-        tasks.insert(TimerId::Watchdog, timer1);
+        tasks.insert(repeated_task_id, timer1);
         let timer2 = repeat_timer(clock.now_instant() + Duration::from_secs(7));
         tasks.insert(TimerId::DebounceSave, timer2);
 
@@ -462,11 +485,11 @@ mod tests {
     }
 
     #[rstest]
-    fn next_deadline_multiple_timers_same_deadline_gets_next(clock: StuckInstantClock) {
+    fn next_deadline_multiple_tasks_sharing_deadline_should_get_that_deadline(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let deadline = clock.now_instant() + Duration::from_secs(9);
         let timer1 = repeat_timer(deadline);
-        tasks.insert(TimerId::Watchdog, timer1);
+        tasks.insert(repeated_task_id, timer1);
         let timer2 = repeat_timer(deadline);
         tasks.insert(TimerId::DebounceSave, timer2);
 
@@ -475,8 +498,8 @@ mod tests {
 
     #[rstest]
     #[case::debounce(debounce_task(), TimerId::DebounceSave)]
-    #[case::repeat(repeat_task(), TimerId::Watchdog)]
-    fn timers_initial_bump_creates_task_and_schedule(
+    #[case::repeat(repeat_task(), repeated_task_id())]
+    fn timers_first_bump_should_create_task_and_schedule_it(
         clock: StuckInstantClock,
         #[case] task: TimerTask,
         #[case] expected_id: TimerId,
@@ -498,7 +521,9 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_passed_creates_action_and_removed(clock: StuckInstantClock) {
+    fn timers_debounce_deadline_passed_should_fire_action_and_remove_task(
+        clock: StuckInstantClock,
+    ) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::DebounceSave, debounce_timer(clock.now_instant()));
 
@@ -508,7 +533,9 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_not_passed_no_action_state_not_updated(clock: StuckInstantClock) {
+    fn timers_debounce_deadline_not_passed_should_not_fire_nor_change_state(
+        clock: StuckInstantClock,
+    ) {
         let mut tasks = HashMap::new();
         tasks.insert(
             TimerId::DebounceSave,
@@ -528,7 +555,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_task_mode_deadline_jumped_no_action_state_updated(clock: StuckInstantClock) {
+    fn timers_debounce_bumped_before_firing_should_reschedule_without_firing(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         tasks.insert(TimerId::DebounceSave, debounce_timer(clock.now_instant()));
         let final_state = TimerState {
@@ -549,7 +576,7 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_debounce_mode_cancel_gets_cancelled_no_action(clock: StuckInstantClock) {
+    fn timers_debounce_cancelled_should_remove_task_without_firing(clock: StuckInstantClock) {
         let mut tasks = HashMap::new();
         let timer = debounce_timer(clock.now_instant());
         tasks.insert(TimerId::DebounceSave, timer);
@@ -566,12 +593,12 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_successive_bump_resets_state(clock: StuckInstantClock) {
+    fn timers_repeat_bumped_before_firing_should_reset_state_without_firing(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1;
         timer.state.deadline = clock.now_instant();
-        tasks.insert(TimerId::Watchdog, timer);
+        tasks.insert(repeated_task_id, timer);
         let expected_final_state = TimerState {
             count: 0,
             deadline: clock.now_instant() + Duration::from_nanos(1),
@@ -585,15 +612,15 @@ mod tests {
             .is_empty()
         );
         assert_eq!(
-            tasks.get(&TimerId::Watchdog).unwrap().state,
+            tasks.get(&repeated_task_id).unwrap().state,
             expected_final_state
         );
     }
 
     #[rstest]
-    fn timers_repeat_mode_deadline_passed_gets_action_re_scheduled(clock: StuckInstantClock) {
+    fn timers_repeat_deadline_passed_should_fire_action_and_reschedule(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
-        tasks.insert(TimerId::Watchdog, repeat_timer(clock.now_instant()));
+        tasks.insert(repeated_task_id, repeat_timer(clock.now_instant()));
         let expected_final_state = TimerState {
             count: 1,
             deadline: clock.now_instant() + Duration::from_nanos(1),
@@ -602,17 +629,17 @@ mod tests {
         let actions = Timers::advance(&mut tasks, None, clock.now_instant());
         assert_eq!(actions, vec![WorkingAction::Save]);
         assert_eq!(
-            tasks.get(&TimerId::Watchdog).unwrap().state,
+            tasks.get(&repeated_task_id).unwrap().state,
             expected_final_state
         );
     }
 
     #[rstest]
-    fn timers_repeat_mode_last_repeat_gets_action_no_rescheduling(clock: StuckInstantClock) {
+    fn timers_repeat_last_repetition_should_fire_action_and_remove_task(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let mut timer = repeat_timer(clock.now_instant());
         timer.state.count = 1;
-        tasks.insert(TimerId::Watchdog, timer);
+        tasks.insert(repeated_task_id, timer);
 
         let actions = Timers::advance(&mut tasks, None, clock.now_instant());
         assert_eq!(actions, vec![WorkingAction::Save]);
@@ -620,19 +647,137 @@ mod tests {
     }
 
     #[rstest]
-    fn timers_repeat_mode_cancel_gets_cancelled(clock: StuckInstantClock) {
+    fn timers_repeat_cancelled_should_remove_task_without_firing(clock: StuckInstantClock, repeated_task_id: TimerId) {
         let mut tasks = HashMap::new();
         let timer = repeat_timer(clock.now_instant());
-        tasks.insert(TimerId::Watchdog, timer);
+        tasks.insert(repeated_task_id, timer);
 
         assert!(
             Timers::advance(
                 &mut tasks,
-                Some(TimersMessage::Cancel(TimerId::Watchdog)),
+                Some(TimersMessage::Cancel(repeated_task_id)),
                 clock.now_instant()
             )
             .is_empty()
         );
         assert!(tasks.is_empty())
+    }
+
+    #[rstest]
+    fn timers_cancel_unknown_task_should_leave_registered_ones_the_same(
+        clock: StuckInstantClock,
+        repeated_task_id: TimerId,
+    ) {
+        let mut tasks = HashMap::new();
+        let deadline = clock.now_instant() + Duration::from_secs(9);
+        tasks.insert(repeated_task_id, repeat_timer(deadline));
+
+        let actions = Timers::advance(
+            &mut tasks,
+            Some(TimersMessage::Cancel(TimerId::RepeatedAction(
+                alternative_ref_uuid(),
+            ))),
+            clock.now_instant(),
+        );
+
+        assert!(actions.is_empty());
+        assert_eq!(tasks.get(&repeated_task_id).unwrap().state.deadline, deadline);
+    }
+
+    #[rstest]
+    fn every_x_interval_cmd_should_convert_into_bump_of_repeated_task() {
+        let message = TimersMessage::from(TimeSubscriptionCmd::EveryXInterval(
+            ref_uuid(),
+            Duration::from_secs(30),
+            WorkingAction::Save,
+        ));
+
+        let TimersMessage::Bump(task) = message else {
+            panic!("EveryXInterval should convert into a Bump");
+        };
+
+        assert_eq!(task.id, TimerId::RepeatedAction(ref_uuid()));
+        assert_eq!(task.timer_type, TimerType::Repeat(None));
+        assert_eq!((task.get_duration)(0), Duration::from_secs(30));
+        assert_eq!((task.get_duration)(41), Duration::from_secs(30));
+    }
+
+    #[rstest]
+    fn every_x_interval_cmd_should_yield_same_action_on_every_repetition() {
+        let message = TimersMessage::from(TimeSubscriptionCmd::EveryXInterval(
+            ref_uuid(),
+            Duration::from_secs(30),
+            WorkingAction::SuccessfulSave,
+        ));
+
+        let TimersMessage::Bump(task) = message else {
+            panic!("EveryXInterval should convert into a Bump");
+        };
+
+        assert_eq!((task.outcome)(0), WorkingAction::SuccessfulSave);
+        assert_eq!((task.outcome)(1), WorkingAction::SuccessfulSave);
+        assert_eq!((task.outcome)(u64::MAX), WorkingAction::SuccessfulSave);
+    }
+
+    #[rstest]
+    fn cancel_every_x_interval_cmd_should_convert_into_cancel_of_repeated_task() {
+        let message = TimersMessage::from(TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid()));
+
+        let TimersMessage::Cancel(id) = message else {
+            panic!("CancelEveryXInterval should convert into a Cancel");
+        };
+
+        assert_eq!(id, TimerId::RepeatedAction(ref_uuid()));
+    }
+
+    #[rstest]
+    fn delayed_save_bump_cmd_should_convert_into_bump_of_debounce_task() {
+        let message = TimersMessage::from(DebounceCmd::DelayedSave(DebounceAction::Bump));
+
+        let TimersMessage::Bump(task) = message else {
+            panic!("DelayedSave(Bump) should convert into a Bump");
+        };
+
+        assert_eq!(task.id, TimerId::DebounceSave);
+        assert_eq!(task.timer_type, TimerType::Debounce);
+        assert_eq!((task.outcome)(0), WorkingAction::Save);
+        assert_eq!((task.get_duration)(0), Duration::from_secs(5));
+    }
+
+    #[rstest]
+    fn delayed_save_cancel_cmd_should_convert_into_cancel_of_debounce_task() {
+        let message = TimersMessage::from(DebounceCmd::DelayedSave(DebounceAction::Cancel));
+
+        let TimersMessage::Cancel(id) = message else {
+            panic!("DelayedSave(Cancel) should convert into a Cancel");
+        };
+
+        assert_eq!(id, TimerId::DebounceSave);
+    }
+
+    #[rstest]
+    fn converted_cmds_should_be_processed_through_advance(clock: StuckInstantClock) {
+        let mut tasks = HashMap::new();
+
+        Timers::advance(
+            &mut tasks,
+            Some(
+                TimeSubscriptionCmd::EveryXInterval(
+                    ref_uuid(),
+                    Duration::from_secs(30),
+                    WorkingAction::Save,
+                )
+                .into(),
+            ),
+            clock.now_instant(),
+        );
+        assert!(tasks.contains_key(&TimerId::RepeatedAction(ref_uuid())));
+
+        Timers::advance(
+            &mut tasks,
+            Some(TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid()).into()),
+            clock.now_instant(),
+        );
+        assert!(tasks.is_empty());
     }
 }

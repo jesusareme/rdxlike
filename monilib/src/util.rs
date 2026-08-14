@@ -65,18 +65,28 @@ impl DropCancellation {
     pub fn new(uuid: Uuid) -> Self {
         DropCancellation(Arc::new(RwLock::new(false)), uuid)
     }
-    pub fn cancellation_handle(&self) -> CancellationCheck {
+    pub fn cancellation_check(&self) -> CancellationCheck {
         CancellationCheck(self.0.clone(), self.1)
     }
 }
 
+#[derive(Debug)]
 pub struct CancellationCheck(Arc<RwLock<bool>>, Uuid);
 impl CancellationCheck {
     pub fn is_cancelled(&self) -> bool {
         *self.0.read().unwrap()
     }
-    pub fn id(&self) -> Uuid {
-        self.1
+    
+    pub fn still_working(&self) -> Option<()> {
+        (!self.is_cancelled()).then_some(())
+    }
+}
+
+impl Drop for DropCancellation {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.0.write() {
+            *guard = true
+        }
     }
 }
 
@@ -86,15 +96,15 @@ impl Clone for CancellationCheck {
     }
 }
 
-impl PartialEq for DropCancellation {
+impl PartialEq for CancellationCheck {
     fn eq(&self, other: &Self) -> bool {
-        self.1 == other.1
+        self.1.eq(&other.1)
     }
 }
 
-impl Drop for DropCancellation {
-    fn drop(&mut self) {
-        *self.0.write().unwrap() = true;
+impl PartialEq for DropCancellation {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1
     }
 }
 

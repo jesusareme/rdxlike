@@ -1,14 +1,16 @@
-use crate::action::{Action, WorkingAction};
 use crate::action::ModelAction::StatisticsAllResult;
+use crate::action::{Action, WorkingAction};
 use crate::runtime::MoniCommand;
+use crate::runtime::cmd::AsyncCmd::StatisticsCalculation;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::cmd::Subscription::{Debounce, Time};
 use crate::runtime::services::{Service, Services};
 use crate::runtime::{Expense, ModelState, MoniProducts, Statistics, StatisticsResults};
-use crate::util::VersionedArc;
+use crate::util::{CancellationCheck, VersionedArc};
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
-use std::{thread, time::Duration};
+use std::time::Duration;
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ServiceCommand {
@@ -25,16 +27,8 @@ impl EnvironmentCommand for ServiceCommand {
                 env.persistence.execute(p_cmd);
             }
             ServiceCommand::Subscribe(s_cmd) => match s_cmd {
-                Time(cmd) => {
-                    env.timers.submit(cmd.into());
-                }
-                Debounce(cmd) => {
-                    let DelayedSave(ref action) = cmd;
-                    match action {
-                        DebounceAction::Bump => env.timers.submit(cmd.into()),
-                        DebounceAction::Cancel => env.timers.remove(cmd.into()),
-                    }
-                }
+                Time(cmd) => env.timers.send(cmd.into()),
+                Debounce(cmd) => env.timers.send(cmd.into()),
             },
         }
     }
@@ -42,13 +36,13 @@ impl EnvironmentCommand for ServiceCommand {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum AsyncCmd {
-    StatisticsCalculation(VersionedArc<Vec<Expense>>, Timestamp),
+    StatisticsCalculation(VersionedArc<Vec<Expense>>, Timestamp, CancellationCheck),
 }
 
 impl AsyncCmd {
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            AsyncCmd::StatisticsCalculation(_, _) => "StatisticsCalculation",
+            StatisticsCalculation(_, _, _) => "StatisticsCalculation",
         }
     }
 }
@@ -56,41 +50,48 @@ impl AsyncCmd {
 impl AsyncCmd {
     pub(crate) fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + 'static> {
         match self {
-            AsyncCmd::StatisticsCalculation(expenses, request_time) => Box::new(move || {
-                let version = expenses.version();
-                let len = expenses.len();
-                let amounts: Vec<_> = expenses.iter().map(|e| e.amount).collect();
-                drop(expenses);
+            StatisticsCalculation(expenses, request_time, cancellation_check) => {
 
-                // Let's suppose this is a long calculation worth moving to a different thread...
-                let results = if len > 0 {
-                    let acc = StatisticsResults {
-                        sum: 0,
-                        max_expense: i64::MIN,
-                        min_expense: i64::MAX,
-                    };
-                    Some(amounts.into_iter().fold(acc, |mut st, a| {
-                        st.sum += a;
-                        if a > st.max_expense {
-                            st.max_expense = a;
-                        };
-                        if a < st.min_expense {
-                            st.min_expense = a
-                        };
-                        st
-                    }))
-                } else {
-                    None
-                };
+                fn calculate_statistics(
+                    expenses: VersionedArc<Vec<Expense>>,
+                    request_time: Timestamp,
+                    cancellation_check: CancellationCheck,
+                ) -> Option<Statistics> {
+                    let version = expenses.version();
+                    let len = expenses.len();
+                    let amounts: Vec<_> = expenses.iter().map(|e| e.amount).collect();
+                    drop(expenses);
 
-                StatisticsAllResult(Statistics {
-                    at_movements_version: version,
-                    requested_at: request_time,
-                    items_len: len,
-                    results,
+                    cancellation_check.still_working()?;
+
+                    // Let's suppose this is a long calculation worth moving to a different thread...
+                    let results = (len > 0).then(|| {
+                        amounts.into_iter().fold(
+                            StatisticsResults { sum: 0, max_expense: i64::MIN, min_expense: i64::MAX },
+                            |mut st, a| {
+                                st.sum += a;
+                                st.max_expense = st.max_expense.max(a);
+                                st.min_expense = st.min_expense.min(a);
+                                st
+                            },
+                        )
+                    });
+
+                    cancellation_check.still_working()?;
+
+                    Some(Statistics {
+                        at_movements_version: version,
+                        requested_at: request_time,
+                        items_len: len,
+                        results,
+                    })
+                }
+
+                Box::new(move || {
+                    StatisticsAllResult(calculate_statistics(expenses, request_time, cancellation_check))
+                    .into()
                 })
-                .into()
-            }),
+            }
         }
     }
 }
@@ -103,7 +104,8 @@ pub(crate) enum Subscription {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum TimeSubscriptionCmd {
-    Watchdog,
+    EveryXInterval(Uuid, Duration, WorkingAction),
+    CancelEveryXInterval(Uuid),
 }
 
 #[derive(Debug, PartialEq)]

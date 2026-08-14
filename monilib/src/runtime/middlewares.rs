@@ -41,7 +41,6 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Action::NoOp;
     use crate::action::WorkingAction;
     use crate::runtime::cmd::DebounceAction::Bump;
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
@@ -56,7 +55,7 @@ mod tests {
     use std::rc::Rc;
 
     fn next_products() -> MoniProducts {
-        MoniProducts::cmd(Cmd::Direct(vec![WorkingAction::WatchdogWatching.into()]))
+        MoniProducts::cmd(Cmd::Direct(vec![WorkingAction::Save.into()]))
             .with_dirty(Dirty::FinancesCurrentMonth | Dirty::Categories)
             .with_delayed_save()
     }
@@ -65,7 +64,7 @@ mod tests {
         assert_eq!(
             products.cmds,
             vec![
-                Cmd::Direct(vec![WorkingAction::WatchdogWatching.into()]),
+                Cmd::Direct(vec![WorkingAction::Save.into()]),
                 DelayedSave(Bump).into(),
             ]
         );
@@ -106,7 +105,7 @@ mod tests {
             mut next: Next<MoniLibClient>,
         ) -> MoniProducts {
             self.calls.update(|calls| calls + 1);
-            assert!(matches!(action, NoOp));
+            assert!(matches!(action, Action::Init));
             if let Some(expected) = &self.expected_time {
                 assert_eq!(&state.running.time, expected);
             }
@@ -130,7 +129,7 @@ mod tests {
         let mut store = chain(middleware, next);
         let mut state = State::default();
 
-        let products = store.run(&mut state, NoOp);
+        let products = store.run(&mut state, Action::Init);
 
         assert_products(products);
         assert_eq!(calls.get(), 1);
@@ -151,7 +150,7 @@ mod tests {
         };
         assert_ne!(state.running.time, contemporary_ref_date());
 
-        let products = store.run(&mut state, NoOp);
+        let products = store.run(&mut state, Action::Init);
 
         assert_products(products);
         assert_eq!(calls.get(), 1);

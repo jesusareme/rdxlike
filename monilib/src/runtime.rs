@@ -5,7 +5,7 @@ mod reducers;
 mod services;
 mod subscribers;
 
-use crate::util::{ClockSource, ExpenseId};
+use crate::util::{ClockSource, DropCancellation, ExpenseId};
 use crate::{
     MoniDomainError, MoniError,
     action::{Action::Init, *},
@@ -14,12 +14,11 @@ use crate::{
 use LibAction::{ErrorsSubscription, PlainListViewSubscription};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
-use model_views::ClockedModelStateView;
 use rdxlib::cmd::Cmd;
 use serde::{Deserialize, Serialize};
 use services::Services;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
@@ -34,9 +33,9 @@ use crate::runtime::cmd::ServiceCommand;
 use crate::runtime::middlewares::MoniMiddleware;
 use crate::runtime::reducers::reducer;
 use rdxlib::messages::Message;
+use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
-use rdxlib::primitives::ThreadPool;
 use rdxlib::util::{MessageSend, MessageSender};
 use rdxlib::{Client, Runtime, RuntimeConfig};
 
@@ -46,6 +45,7 @@ use boltffi::data;
 use rdxlib::middleware::ChainableMiddleware;
 #[cfg(test)]
 use std::cmp::Ordering;
+use uuid::Uuid;
 
 pub(crate) struct MoniLibClient;
 impl Client for MoniLibClient {
@@ -185,14 +185,14 @@ impl Default for ModelState {
 }
 
 #[data]
-#[derive(PartialEq, Debug, Serialize, Deserialize, Copy, Clone)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Copy, Clone)]
 pub enum ExpenseCategory {
     Essential,
     Important,
     Optional,
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct Expense {
     id: ExpenseId,
     date: Zoned,
@@ -247,8 +247,6 @@ impl PartialOrd<Expense> for Expense {
         Some(self.cmp(other))
     }
 }
-#[cfg(test)]
-impl Eq for Expense {}
 
 #[cfg(test)]
 impl Ord for Expense {
@@ -270,7 +268,7 @@ impl Default for Expense {
     }
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Statistics {
     pub at_movements_version: u64,
     pub requested_at: Timestamp,
@@ -278,24 +276,30 @@ pub struct Statistics {
     pub results: Option<StatisticsResults>,
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct StatisticsResults {
     pub sum: i64,
     pub max_expense: i64,
     pub min_expense: i64,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 struct PlainListViewState {
     hint: Option<ExpenseId>,
 }
 
 #[derive(Debug, Default)]
 struct RunningState {
-    // counting_cancellation: Option<DropCancellation>,
     time: Zoned,
     errors: Vec<MoniError>,
     plain_list: HashMap<ViewId, PlainListViewState>,
+    tasks: LongLivingTasks,
+}
+
+#[derive(Debug, Default)]
+struct LongLivingTasks {
+    recurrent_add: HashSet<Uuid>,
+    statistics_running: Option<DropCancellation>,
 }
 
 impl MoniMiddleware {

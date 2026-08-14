@@ -24,6 +24,7 @@ use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
 use rdxlib::util::{MessageSend, MessageSender};
 use std::thread::JoinHandle;
+use std::time::Duration;
 use std::{
     sync::{Arc, mpsc},
     thread::Builder,
@@ -193,9 +194,8 @@ impl MoniLib {
         Ok(())
     }
 
-    pub fn save(&self) -> Result<(), MoniError>{
-        self.action_sender
-            .send_message(WorkingAction::Save)?;
+    pub fn save(&self) -> Result<(), MoniError> {
+        self.action_sender.send_message(WorkingAction::Save)?;
         Ok(())
     }
 
@@ -221,9 +221,26 @@ impl MoniLib {
         out.into()
     }
 
-    pub fn watchdog(&self) -> Result<(), MoniError> {
+    pub fn schedule_repeat_expense(
+        &self,
+        expense: MoniExpense,
+        interval: Duration,
+    ) -> Result<Uuid, MoniError> {
+        let uuid = Uuid::new_v4();
         self.action_sender
-            .send_message(WorkingAction::Watchdog)?;
+            .send_message(ModelAction::AddEveryXInterval(
+                uuid,
+                interval,
+                Box::new(WorkingAction::Model(ModelAction::Add(
+                    expense.into_add_intent(self.clock.as_ref())?,
+                ))),
+            ))?;
+        Ok(uuid)
+    }
+
+    pub fn cancel_repeat_expense(&self, id: Uuid) -> Result<(), MoniError> {
+        self.action_sender
+            .send_message(ModelAction::StopAddingEveryXInterval(id))?;
         Ok(())
     }
 

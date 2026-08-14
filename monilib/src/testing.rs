@@ -3,9 +3,20 @@ use crate::util::{ClockSource, ExpenseId};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
 use std::time::Instant;
+use uuid::Uuid;
 
 pub fn ref_id() -> u64 {
     42
+}
+
+pub fn ref_uuid() -> Uuid {
+    Uuid::parse_str("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8")
+        .expect("Example Uuid parsing should not fail")
+}
+
+pub fn alternative_ref_uuid() -> Uuid {
+    Uuid::parse_str("f1f2f3f4e1e2d1d2c1c2b1b2b3b4b5b6")
+        .expect("Example Uuid parsing should not fail")
 }
 
 pub fn contemporary_ref_date() -> Zoned {
