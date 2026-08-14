@@ -163,20 +163,23 @@ pub(crate) struct State {
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
 pub struct ModelState {
     model_version: u16,
-    counter: u32,
-    info: String,
     movements: VersionedArc<Vec<Expense>>,
     statistics_all: Option<Statistics>,
+    ids: Ids,
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Ids {
+    next_expense_id: ExpenseId,
 }
 
 impl Default for ModelState {
     fn default() -> Self {
         ModelState {
             model_version: MODEL_VERSION,
-            counter: 0,
-            info: String::new(),
             movements: VersionedArc::from(vec![]),
             statistics_all: None,
+            ids: Ids::default()
         }
     }
 }

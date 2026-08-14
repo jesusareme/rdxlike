@@ -1,6 +1,6 @@
 use crate::inout::MoniValidationErrorCause::Range;
 use crate::runtime::Expense;
-use crate::util::{ClockSource, ExpenseId, IdSource};
+use crate::util::{ClockSource, ExpenseId};
 use crate::{ExpenseCategory, LibErrorCause, MoniError, MoniErrorType};
 use boltffi::{EventSubscription, data, error};
 use jiff::Zoned;
@@ -12,7 +12,6 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
-use uuid::Uuid;
 
 #[data]
 #[derive(Clone, Debug, PartialEq)]
@@ -54,7 +53,7 @@ pub struct MoniStatistics {
 #[data]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlainListItem {
-    pub id: Uuid,
+    pub id: u64,
     pub date: SystemTime,
     pub amount: i64,
     pub comment: Option<String>,
@@ -73,14 +72,14 @@ pub struct MoniExpense {
 #[data]
 #[derive(Clone)]
 pub struct MoniExpenseUpdate {
-    pub uuid: Uuid,
+    pub id: u64,
     pub expense: MoniExpense,
 }
 
 #[data]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MoniExpensePlainListSnapshot {
-    pub ids: Vec<Uuid>,
+    pub ids: Vec<u64>,
     pub updated: Vec<PlainListItem>,
 }
 
@@ -91,13 +90,31 @@ fn date_error(cause: MoniValidationErrorCause) -> MoniValidationError {
     }
 }
 
+fn validated_date(date: SystemTime, clock: &dyn ClockSource) -> Result<Zoned, MoniValidationError> {
+    let date = Zoned::try_from(date).map_err(|_| date_error(MoniValidationErrorCause::Date))?;
+
+    if date > clock.now_civil() {
+        return Err(date_error(Range));
+    }
+
+    Ok(date)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExpenseAddIntent {
+    pub date: Option<Zoned>,
+    pub amount: i64,
+    pub comment: Option<String>,
+    pub category: ExpenseCategory,
+}
+
 impl MoniExpenseUpdate {
     pub fn into_updatable_expense(
         self,
         clock: &dyn ClockSource,
     ) -> Result<Expense, MoniValidationError> {
         let MoniExpenseUpdate {
-            uuid,
+            id,
             expense:
                 MoniExpense {
                     date,
@@ -109,18 +126,13 @@ impl MoniExpenseUpdate {
 
         let date = match date {
             None => return Err(date_error(MoniValidationErrorCause::Empty)),
-            Some(system_date) => Zoned::try_from(system_date)
-                .map_err(|_| date_error(MoniValidationErrorCause::Date))?,
+            Some(system_date) => validated_date(system_date, clock)?,
         };
-
-        if date > clock.now_civil() {
-            return Err(date_error(Range));
-        }
 
         let amount = MoniExpense::validated_amount(amount)?;
 
         Ok(Expense::new(
-            ExpenseId::from(uuid),
+            ExpenseId::from(id),
             date,
             amount,
             comment,
@@ -130,37 +142,28 @@ impl MoniExpenseUpdate {
 }
 
 impl MoniExpense {
-    pub fn into_expense(
+    pub(crate) fn into_add_intent(
         self,
         clock: &dyn ClockSource,
-        ids: &dyn IdSource,
-    ) -> Result<Expense, MoniValidationError> {
-        let now = clock.now_civil();
-
-        let date = match self.date {
-            Some(system_date) => Zoned::try_from(system_date)
-                .map_err(|_| date_error(MoniValidationErrorCause::Date))?,
-            None => now.clone(),
+    ) -> Result<ExpenseAddIntent, MoniValidationError> {
+        let validated_date = match self.date {
+            Some(system_date) => Some(validated_date(system_date, clock)?),
+            None => None,
         };
-
-        if date > clock.now_civil() {
-            return Err(date_error(Range));
-        }
 
         let amount = Self::validated_amount(self.amount)?;
 
-        Ok(Expense::new(
-            ids.new_expense_id(now.timestamp()),
-            date,
+        Ok(ExpenseAddIntent {
+            date: validated_date,
             amount,
-            self.comment,
-            self.category,
-        ))
+            comment: self.comment,
+            category: self.category,
+        })
     }
 }
 
 impl MoniExpense {
-    const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
+    pub const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
 
     fn validated_amount(amount: i64) -> Result<i64, MoniValidationError> {
         if (-Self::AMOUNT_LIMIT..=Self::AMOUNT_LIMIT).contains(&amount) {
@@ -244,32 +247,36 @@ pub fn try_state_path(path: impl AsRef<Path>) -> Result<(), MoniError> {
 mod tests {
     use super::*;
     use crate::testing::{
-        FixedIdSource, StuckClock, contemporary_ref_date, distant_future_ref_date,
-        distant_past_ref_date, ref_id,
+        StuckClock, contemporary_ref_date, distant_future_ref_date, distant_past_ref_date, ref_id,
     };
     use jiff::ToSpan;
     use rstest::rstest;
 
+    fn add_intent(date: Option<Zoned>, amount: i64) -> ExpenseAddIntent {
+        ExpenseAddIntent {
+            date,
+            amount,
+            comment: Some("comment".to_string()),
+            category: ExpenseCategory::Essential,
+        }
+    }
+
     #[test]
-    fn into_expense_no_date() {
+    fn into_add_intent_no_date_stays_empty() {
         let m_expense = MoniExpense::default();
         let clock = StuckClock {
             stuck_at: distant_future_ref_date(),
         };
-        let ids = FixedIdSource {
-            id: ExpenseId::from(ref_id()),
-        };
-        let expense = m_expense
-            .into_expense(&clock, &ids)
-            .expect("Conversion should work without errors");
-        let compared =
-            Expense::new_default_with(ExpenseId::from(ref_id()), clock.now_civil(), None);
 
-        assert_eq!(expense, compared)
+        let intent = m_expense
+            .into_add_intent(&clock)
+            .expect("Conversion should work without errors");
+
+        assert_eq!(intent, add_intent(None, 1230))
     }
 
     #[test]
-    fn into_expense_date_future() {
+    fn into_add_intent_date_future() {
         let m_expense = MoniExpense {
             date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
@@ -278,18 +285,15 @@ mod tests {
         let clock = StuckClock {
             stuck_at: distant_future_ref_date() - 1.nanosecond(),
         };
-        let ids = FixedIdSource {
-            id: ExpenseId::from(ref_id()),
-        };
 
         assert_eq!(
-            m_expense.into_expense(&clock, &ids).err().unwrap().cause,
+            m_expense.into_add_intent(&clock).err().unwrap().cause,
             Range
         );
     }
 
     #[test]
-    fn into_expense_date_past() {
+    fn into_add_intent_date_past() {
         let m_expense = MoniExpense {
             date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
@@ -298,16 +302,10 @@ mod tests {
         let clock = StuckClock {
             stuck_at: distant_future_ref_date() + 1.nanosecond(),
         };
-        let ids = FixedIdSource {
-            id: ExpenseId::from(ref_id()),
-        };
 
-        let expense = m_expense.into_expense(&clock, &ids).expect("no errors");
+        let intent = m_expense.into_add_intent(&clock).expect("no errors");
 
-        let compared =
-            Expense::new_default_with(ExpenseId::from(ref_id()), distant_future_ref_date(), None);
-
-        assert_eq!(expense, compared)
+        assert_eq!(intent, add_intent(Some(distant_future_ref_date()), 1230))
     }
 
     #[test]
@@ -317,7 +315,7 @@ mod tests {
             ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
-            uuid: ref_id(),
+            id: ref_id(),
             expense: no_date_expense,
         };
         let clock = StuckClock {
@@ -339,7 +337,7 @@ mod tests {
             ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
-            uuid: ref_id(),
+            id: ref_id(),
             expense: future_date_expense,
         };
         let clock = StuckClock {
@@ -361,7 +359,7 @@ mod tests {
             ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
-            uuid: ref_id(),
+            id: ref_id(),
             expense: past_date_expense,
         };
         let clock = StuckClock {
@@ -384,7 +382,7 @@ mod tests {
     #[case::at_upper_limit(MoniExpense::AMOUNT_LIMIT, true)]
     #[case::at_lower_limit(-MoniExpense::AMOUNT_LIMIT, true)]
     #[case::within_limits(4200, true)]
-    fn into_expense_validates_amount(#[case] amount: i64, #[case] valid: bool) {
+    fn into_add_intent_validates_amount(#[case] amount: i64, #[case] valid: bool) {
         let m_expense = MoniExpense {
             amount,
             ..MoniExpense::default()
@@ -392,19 +390,11 @@ mod tests {
         let clock = StuckClock {
             stuck_at: contemporary_ref_date(),
         };
-        let ids = FixedIdSource {
-            id: ExpenseId::from(ref_id()),
-        };
 
-        let result = m_expense.into_expense(&clock, &ids);
+        let result = m_expense.into_add_intent(&clock);
 
         if valid {
-            let compared = Expense::new_default_with(
-                ExpenseId::from(ref_id()),
-                clock.now_civil(),
-                Some(amount),
-            );
-            assert_eq!(result.expect("Should be ok"), compared);
+            assert_eq!(result.expect("Should be ok"), add_intent(None, amount));
         } else {
             let error = result.expect_err("Should be error");
             assert_eq!(error.cause, Range);
@@ -425,7 +415,7 @@ mod tests {
             ..MoniExpense::default()
         };
         let expense_update = MoniExpenseUpdate {
-            uuid: ref_id(),
+            id: ref_id(),
             expense: m_expense,
         };
         let clock = StuckClock {

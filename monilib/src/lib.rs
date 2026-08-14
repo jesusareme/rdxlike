@@ -30,7 +30,7 @@ use std::{
 };
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-use util::{ClockSource, RandomIdSource, SystemClockSource};
+use util::{ClockSource, SystemClockSource};
 use uuid::Uuid;
 
 #[data]
@@ -69,7 +69,7 @@ pub struct PlainListViewHandler {
 
 #[export]
 impl PlainListViewHandler {
-    pub fn hint(&self, hint: Uuid) -> Result<(), MoniError> {
+    pub fn hint(&self, hint: u64) -> Result<(), MoniError> {
         self.action_sender
             .send_message(RunningAction::ListViewHint(
                 self.token,
@@ -96,7 +96,6 @@ impl PlainListViewHandler {
 pub struct MoniLib {
     action_sender: MessageSender<MoniMessage>,
     clock: Arc<dyn ClockSource + Send + Sync>,
-    ids: RandomIdSource,
     lib_thread_handle: JoinHandle<()>,
 }
 
@@ -158,7 +157,6 @@ impl MoniLib {
         Ok(MoniLib {
             action_sender: dispatcher,
             clock,
-            ids: RandomIdSource,
             lib_thread_handle: actions_handler,
         })
     }
@@ -171,8 +169,8 @@ impl MoniLib {
     }
 
     pub fn add_expense(&self, expense: MoniExpense) -> Result<(), MoniError> {
-        let expense = expense.into_expense(self.clock.as_ref(), &self.ids)?;
-        self.action_sender.send_message(ModelAction::Add(expense))?;
+        let intent = expense.into_add_intent(self.clock.as_ref())?;
+        self.action_sender.send_message(ModelAction::Add(intent))?;
         Ok(())
     }
 
@@ -183,7 +181,7 @@ impl MoniLib {
         Ok(())
     }
 
-    pub fn delete_expense(&self, delete: Uuid) -> Result<(), MoniError> {
+    pub fn delete_expense(&self, delete: u64) -> Result<(), MoniError> {
         self.action_sender
             .send_message(ModelAction::Delete(ExpenseId::from(delete)))?;
         Ok(())

@@ -217,6 +217,7 @@ impl From<TimeSubscriptionCmd> for TimerTask {
                 timer_type: TimerType::Repeat(None),
                 get_duration: |_| Duration::from_secs(1),
             },
+            TimeSubscriptionCmd::EveryXSeconds(_action) => todo!("recurrent add timer"),
         }
     }
 }

@@ -1,13 +1,11 @@
 use crate::runtime::Expense;
-use crate::util::{ClockSource, ExpenseId, IdSource};
+use crate::util::{ClockSource, ExpenseId};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
-use std::str::FromStr;
 use std::time::Instant;
-use uuid::Uuid;
 
-pub fn ref_id() -> Uuid {
-    Uuid::from_str("01234567-0123-0123-0123-000000000001").unwrap()
+pub fn ref_id() -> u64 {
+    42
 }
 
 pub fn contemporary_ref_date() -> Zoned {
@@ -36,8 +34,7 @@ pub fn ordered_by_index_map<const S: usize, T: PartialOrd + Clone>(
 
 pub fn ordered_expenses<const S: usize>(ref_date: Zoned) -> [Expense; S] {
     std::array::from_fn(|i| {
-        let id =
-            ExpenseId::from(Uuid::from_str(&format!("01234567-0123-0123-0123-{:012}", i)).unwrap());
+        let id = ExpenseId::from(i as u64);
         Expense::new_default_with(id, &ref_date + (i as i64).days(), Some(i as i64))
     })
 }
@@ -86,12 +83,3 @@ impl Default for StuckInstantClock {
     }
 }
 
-pub struct FixedIdSource {
-    pub id: ExpenseId,
-}
-
-impl IdSource for FixedIdSource {
-    fn new_expense_id(&self, _at: Timestamp) -> ExpenseId {
-        self.id
-    }
-}

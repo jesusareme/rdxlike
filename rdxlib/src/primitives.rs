@@ -99,7 +99,7 @@ impl<T> OneSlotReceiver<T> {
         guard
             .latest
             .take()
-            .map_or_else(|| Err(RecvError), |v| Ok(v))
+            .ok_or(RecvError)
     }
 
     pub fn try_recv(&self) -> Result<T, TryRecvError> {

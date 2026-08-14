@@ -1,16 +1,12 @@
-use jiff::{Timestamp, Zoned};
+use jiff::Zoned;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Debug, Display, Formatter};
 use std::time::Instant;
 use std::{
-    ops::{Deref},
-    sync::{
-        Arc, RwLock,
-        mpsc::{SendError, Sender},
-    },
+    ops::Deref,
+    sync::{Arc, RwLock},
 };
-use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
-
 
 pub trait ClockSource {
     fn now_civil(&self) -> Zoned;
@@ -28,16 +24,29 @@ impl ClockSource for SystemClockSource {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Clone, Copy)]
-pub struct ExpenseId(Uuid);
+pub trait IdSource {
+    /// Returns the currently available value and advances the internal counter
+    fn get_and_inc(&mut self) -> Self;
+}
 
-impl From<Uuid> for ExpenseId {
-    fn from(value: Uuid) -> Self {
+#[derive(PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Clone, Copy, Default)]
+pub struct ExpenseId(u64);
+
+impl IdSource for ExpenseId {
+    fn get_and_inc(&mut self) -> Self {
+        let next = *self;
+        *self = ExpenseId(self.0.checked_add(1).expect("ExpenseId space exhausted"));
+        next
+    }
+}
+
+impl From<u64> for ExpenseId {
+    fn from(value: u64) -> Self {
         ExpenseId(value)
     }
 }
 
-impl From<ExpenseId> for Uuid {
+impl From<ExpenseId> for u64 {
     fn from(value: ExpenseId) -> Self {
         value.0
     }
@@ -45,31 +54,7 @@ impl From<ExpenseId> for Uuid {
 
 impl Display for ExpenseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-#[cfg(test)]
-impl ExpenseId {
-    pub fn uuid(&self) -> Uuid {
-        self.0
-    }
-}
-
-pub trait IdSource {
-    fn new_expense_id(&self, at: Timestamp) -> ExpenseId;
-}
-
-pub struct RandomIdSource;
-
-impl IdSource for RandomIdSource {
-    fn new_expense_id(&self, at: Timestamp) -> ExpenseId {
-        let ts = uuid::Timestamp::from_unix(
-            uuid::NoContext,
-            at.as_second() as u64,
-            at.subsec_nanosecond() as u32,
-        );
-        ExpenseId(Uuid::new_v7(ts))
+        f.debug_tuple("ExpenseId").field(&self.0).finish()
     }
 }
 

@@ -15,8 +15,8 @@ struct PlainListView: View {
         List(model.list) { item in
             ExpenseRow(item: item)
                 .onAppear() {
-                    if case let .fault(uuid) = item {
-                        self.model.hint(uuid: uuid)
+                    if case let .fault(id) = item {
+                        self.model.hint(id: id)
                     }
                 }
         }

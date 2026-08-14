@@ -81,9 +81,9 @@ extension MoniErrorType: @retroactive CustomStringConvertible {
 
 public enum ExpenseListItem: Identifiable {
     case expense(PlainListItem)
-    case fault(UUID)
-    
-    public var id: UUID {
+    case fault(UInt64)
+
+    public var id: UInt64 {
         switch self {
             case .expense(let expense):
             return expense.id
@@ -91,8 +91,8 @@ public enum ExpenseListItem: Identifiable {
             return id
         }
     }
-    
-    init(id: UUID, expense: PlainListItem?) {
+
+    init(id: UInt64, expense: PlainListItem?) {
         if let expense {
             self = .expense(expense)
         } else {
@@ -105,7 +105,7 @@ public enum ExpenseListItem: Identifiable {
     @ObservationIgnored private let lib: MoniLib
     @ObservationIgnored private let listHandler: PlainListViewHandler
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
-    @ObservationIgnored private var cachedItems: [UUID: PlainListItem] = [:]
+    @ObservationIgnored private var cachedItems: [UInt64: PlainListItem] = [:]
     
     public var list: [ExpenseListItem] = []
     
@@ -132,9 +132,9 @@ public enum ExpenseListItem: Identifiable {
         }
     }
     
-    public func hint(uuid: UUID) {
+    public func hint(id: UInt64) {
         do {
-            try self.listHandler.hint(hint: uuid)
+            try self.listHandler.hint(hint: id)
         } catch {
             print("Error hinting: \(error)")
         }

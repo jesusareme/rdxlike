@@ -25,7 +25,7 @@ pub enum MoniErrorType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MoniDomainError {
     Validation(MoniValidationError),
-    ExpenseNotFound(Uuid),
+    ExpenseNotFound(u64),
 }
 
 impl MoniError {

@@ -1,18 +1,18 @@
 use rdxlib::messages::Message;
 use rdxlib::subscribers::ViewId;
 use crate::{inout::{LibOutput}, runtime::{Expense, PersistenceError}, MoniError, MoniExpensePlainListSnapshot};
-use crate::inout::{MoniStatistics};
+use crate::inout::{ExpenseAddIntent, MoniStatistics};
 use crate::runtime::{MoniMessage, Statistics};
 use crate::util::ExpenseId;
 
-pub enum LibAction {
+pub(crate) enum LibAction {
     PlainListViewSubscription(ViewId, LibOutput<MoniExpensePlainListSnapshot>),
     ErrorsSubscription(LibOutput<Vec<MoniError>>),
     StatisticsSubscription(LibOutput<MoniStatistics>),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Action {
+pub(crate) enum Action {
     NoOp,
     Init,
     InitResult(Result<Option<String>, PersistenceError>),
@@ -27,7 +27,7 @@ impl From<Action> for Message<Action, LibAction> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum WorkingAction {
+pub(crate) enum WorkingAction {
     Model(ModelAction),
     Save,
 
@@ -38,7 +38,7 @@ pub enum WorkingAction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RunningAction {
+pub(crate) enum RunningAction {
     Error(MoniError),
     ListViewHint(ViewId, ExpenseId),
     ListViewPrepare(ViewId),
@@ -46,13 +46,15 @@ pub enum RunningAction {
 
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ModelAction {
-    Add(Expense),
+pub(crate) enum ModelAction {
+    Add(ExpenseAddIntent),
     Update(Expense),
     Delete(ExpenseId),
     StatisticsAll,
-    
-    StatisticsAllResult(Statistics)
+    StatisticsAllResult(Statistics),
+
+    // Action to set a recurrent timer as example of cancellable state
+    AddEverySecond(Box<WorkingAction>),
 }
 
 impl From<WorkingAction> for Action {

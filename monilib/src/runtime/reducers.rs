@@ -149,18 +149,31 @@ fn finances_dirty(date: &Zoned, first_of_month: &Zoned) -> Dirty {
 
 fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProducts {
     match action {
-        ModelAction::Add(expense) => {
+        ModelAction::Add(expense_intent) => {
             let first_of_month = state
                 .time
                 .first_of_month()
                 .expect("first_of_month from an injected Zoned cannot fail");
+            
+            let date = expense_intent.date.unwrap_or(state.time.clone());
 
-            let dirty = finances_dirty(&expense.date, &first_of_month);
+            let dirty = finances_dirty(&date, &first_of_month);
 
             let idx = state
                 .model_state
                 .movements
-                .partition_point(|e| e.date <= expense.date);
+                .partition_point(|e| e.date <= date);
+            
+            let id = state.model_state.ids.next_expense_id.get_and_inc();
+            let expense = Expense::new(
+                id,
+                date,
+                expense_intent.amount,
+                expense_intent.comment,
+                expense_intent.category,
+            );
+
+
             state.model_state.movements.update_with(|expenses| {
                 expenses.insert(idx, expense);
             });
@@ -284,6 +297,7 @@ mod reducer_model_test {
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
     use crate::runtime::cmd::ServiceCommand::Subscribe;
     use crate::runtime::cmd::Subscription::Debounce;
+    use crate::inout::ExpenseAddIntent;
     use crate::testing::{contemporary_ref_date, ordered_by_index_map};
     use itertools::Itertools;
     use jiff::{Span, ToSpan};
@@ -291,13 +305,12 @@ mod reducer_model_test {
     use proptest::{prop_compose, proptest};
     use rdxlib::cmd::Cmd::Env;
     use rstest::rstest;
-    use std::str::FromStr;
     use std::time::SystemTime;
-    use uuid::Uuid;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();
         Expense {
+            id: ExpenseId::from(0),
             date: past,
             ..Expense::default()
         }
@@ -306,6 +319,7 @@ mod reducer_model_test {
     fn expense_just_before_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap() - 1.nanosecond();
         Expense {
+            id: ExpenseId::from(0),
             date: past,
             ..Expense::default()
         }
@@ -315,50 +329,38 @@ mod reducer_model_test {
         let calculate_date = |back: i64| &date_last - step_back * back;
         vec![
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000001").unwrap(),
-                ),
+                id: ExpenseId::from(0),
                 date: calculate_date(5),
                 amount: -1000,
                 ..Expense::default()
             },
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000002").unwrap(),
-                ),
+                id: ExpenseId::from(1),
                 date: calculate_date(4),
                 amount: 20000,
                 category: Optional,
                 comment: None,
             },
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000003").unwrap(),
-                ),
+                id: ExpenseId::from(2),
                 date: calculate_date(3),
                 amount: 3400,
                 category: Important,
                 comment: Some("Pair of shoes".to_string()),
             },
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000004").unwrap(),
-                ),
+                id: ExpenseId::from(3),
                 date: calculate_date(2),
                 ..Expense::default()
             },
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000005").unwrap(),
-                ),
+                id: ExpenseId::from(4),
                 date: calculate_date(1),
                 amount: 100,
                 ..Expense::default()
             },
             Expense {
-                id: ExpenseId::from(
-                    Uuid::from_str("01234567-0123-0123-0123-000000000006").unwrap(),
-                ),
+                id: ExpenseId::from(5),
                 date: calculate_date(0),
                 category: Essential,
                 ..Expense::default()
@@ -382,6 +384,15 @@ mod reducer_model_test {
         )
     }
 
+    fn add_intent(expense: &Expense) -> ModelAction {
+        ModelAction::Add(ExpenseAddIntent {
+            date: Some(expense.date.clone()),
+            amount: expense.amount,
+            comment: expense.comment.clone(),
+            category: expense.category,
+        })
+    }
+
     fn expense_category_strategy() -> impl Strategy<Value = ExpenseCategory> {
         prop_oneof![Just(Important), Just(Essential), Just(Optional),]
     }
@@ -394,7 +405,7 @@ mod reducer_model_test {
             category in expense_category_strategy(),
         ) -> Expense {
             Expense::new(
-                ExpenseId::from(Uuid::now_v7()),
+                ExpenseId::default(),
                 Zoned::try_from(date).unwrap(),
                 amount,
                 comment,
@@ -413,10 +424,9 @@ mod reducer_model_test {
 
     proptest! {
         #[test]
-        fn expenses_add_proptest((mut expenses, new_dates) in arb_expenses_and_date_offsets()) {
+        fn expenses_add_proptest((expenses, new_dates) in arb_expenses_and_date_offsets()) {
             prop_assume!(expenses.len() == new_dates.len(), "Test configuration issue: not enough durations");
 
-            let uuids: Vec<_> = expenses.iter().map(|e| e.id).collect();
 
             let mut state = ModelState::default();
             let mut errors = vec![];
@@ -426,7 +436,7 @@ mod reducer_model_test {
                     &mut state,
                     &contemporary_ref_date(),
                     &mut errors,
-                    ModelAction::Add(e),
+                    add_intent(&e),
                 );
                 assert!(state.movements.is_sorted_by_key(|e| e.date.clone()));
             });
@@ -439,9 +449,13 @@ mod reducer_model_test {
             }).collect();
             assert_eq!(saves.len(), expenses.len());
 
+            let mut stored: Vec<Expense> = state.movements.to_vec();
+
+            let ids: Vec<_> = stored.iter().map(|e| e.id).collect();
+
             products = MoniProducts::none();
 
-            for (e, d) in expenses.iter_mut().zip(new_dates) {
+            for (e, d) in stored.iter_mut().zip(new_dates) {
                 let d = Zoned::try_from(d);
                 prop_assume!(d.is_ok(), "Unexpected date unable to convert to Zoned");
                 e.date = d.unwrap();
@@ -461,7 +475,7 @@ mod reducer_model_test {
             assert_eq!(saves.len(), expenses.len());
             assert!(errors.is_empty());
 
-            uuids.into_iter().for_each(|id| {
+            ids.into_iter().for_each(|id| {
                 _ = reduce(
                     &mut state,
                     &contemporary_ref_date(),
@@ -490,7 +504,7 @@ mod reducer_model_test {
             &mut state,
             &contemporary_ref_date(),
             &mut errors,
-            ModelAction::Add(expense.clone()),
+            add_intent(&expense),
         );
 
         assert_eq!(products.flags, dirty);
@@ -511,17 +525,27 @@ mod reducer_model_test {
             let mut state = ModelState::default();
             let mut errors = vec![];
 
+            let mut expected: Vec<Expense> = expenses_perm
+                .iter()
+                .enumerate()
+                .map(|(assigned, expense)| Expense {
+                    id: ExpenseId::from(assigned as u64),
+                    ..(*expense).clone()
+                })
+                .collect();
+            expected.sort_by(|a, b| a.date.cmp(&b.date));
+
             for expense in expenses_perm {
                 _ = reduce(
                     &mut state,
                     &contemporary_ref_date(),
                     &mut errors,
-                    ModelAction::Add(expense.clone()),
+                    add_intent(expense),
                 );
             }
 
             assert!(errors.is_empty());
-            assert_eq!(*state.movements, original);
+            assert_eq!(*state.movements, expected);
         }
     }
 
@@ -529,13 +553,13 @@ mod reducer_model_test {
     fn reducer_model_add_expense_same_date_inserts_newest_last() {
         let shared = contemporary_ref_date().first_of_month().unwrap();
         let first = Expense {
-            id: ExpenseId::from(Uuid::from_str("01234567-0123-0123-0123-000000000001").unwrap()),
+            id: ExpenseId::from(0),
             date: shared.clone(),
             amount: 1,
             ..Expense::default()
         };
         let second = Expense {
-            id: ExpenseId::from(Uuid::from_str("01234567-0123-0123-0123-000000000002").unwrap()),
+            id: ExpenseId::from(1),
             date: shared.clone(),
             amount: 2,
             ..Expense::default()
@@ -547,13 +571,13 @@ mod reducer_model_test {
             &mut state,
             &contemporary_ref_date(),
             &mut errors,
-            ModelAction::Add(first.clone()),
+            add_intent(&first),
         );
         _ = reduce(
             &mut state,
             &contemporary_ref_date(),
             &mut errors,
-            ModelAction::Add(second.clone()),
+            add_intent(&second),
         );
 
         assert!(errors.is_empty());
@@ -564,10 +588,14 @@ mod reducer_model_test {
     fn reducer_model_add_expense_into_mid_list() {
         let expenses = expenses_list(contemporary_ref_date(), 1.month());
         let mid = Expense {
+            id: ExpenseId::from(expenses.len() as u64),
             date: &expenses[3].date + 1.nanosecond(),
             ..Expense::default()
         };
         let mut state = ModelState {
+            ids: Ids {
+                next_expense_id: ExpenseId::from(expenses.len() as u64),
+            },
             movements: VersionedArc::from(expenses),
             ..ModelState::default()
         };
@@ -577,7 +605,7 @@ mod reducer_model_test {
             &mut state,
             &contemporary_ref_date(),
             &mut errors,
-            ModelAction::Add(mid.clone()),
+            add_intent(&mid),
         );
 
         assert!(errors.is_empty());
@@ -596,7 +624,7 @@ mod reducer_model_test {
                 &mut state,
                 &contemporary_ref_date(),
                 &mut vec![],
-                ModelAction::Add(expense.clone()),
+                add_intent(&expense),
             ));
         }
 
@@ -626,7 +654,7 @@ mod reducer_model_test {
         assert!(matches!(
             &errors[0].error_type,
             MoniErrorType::Domain(MoniDomainError::ExpenseNotFound(id))
-                if *id == Uuid::from(Expense::default().id)
+                if *id == u64::from(Expense::default().id)
         ));
     }
 
@@ -836,9 +864,7 @@ mod reducer_model_test {
             &mut state,
             &contemporary_ref_date(),
             &mut errors,
-            ModelAction::Delete(ExpenseId::from(
-                Uuid::from_str("01234567-0123-0123-0123-000000000099").unwrap(),
-            )),
+            ModelAction::Delete(ExpenseId::from(99)),
         );
 
         assert!(products.flags.is_empty());
@@ -847,7 +873,7 @@ mod reducer_model_test {
         assert!(matches!(
             &errors[0].error_type,
             MoniErrorType::Domain(MoniDomainError::ExpenseNotFound(id))
-                if *id == Uuid::from_str("01234567-0123-0123-0123-000000000099").unwrap()
+                if *id == 99
         ));
     }
 

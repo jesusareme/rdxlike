@@ -56,10 +56,7 @@ impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
     }
 
     fn derive(&mut self, slice: Self::Slice) -> Option<Self::Product> {
-        let Some(last) = slice.last() else {
-            return None;
-        };
-        let last = last.id;
+        let last = slice.last()?.id;
         let mut new_errors = vec![];
         if let Some(last_processed_id) = self.last_consumed_id {
             new_errors.extend(slice.into_iter().rev().map_while(|error| {
@@ -155,9 +152,9 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
         Some(MoniStatistics {
             date: slice.requested_at.into(),
             len: slice.items_len,
-            sum: slice.results.map_or_else(|| None, |s| Some(s.sum)),
-            min: slice.results.map_or_else(|| None, |s| Some(s.min_expense)),
-            max: slice.results.map_or_else(|| None, |s| Some(s.max_expense)),
+            sum: slice.results.map(|s| s.sum),
+            min: slice.results.map(|s| s.min_expense),
+            max: slice.results.map(|s| s.max_expense),
         })
     }
 }
@@ -213,7 +210,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     }
 
     fn derive(&mut self, slice: PlainListStateSlice) -> Option<MoniExpensePlainListSnapshot> {
-        let ids: Vec<Uuid> = slice.expenses.iter().rev().map(|e| e.id.into()).collect();
+        let ids: Vec<u64> = slice.expenses.iter().rev().map(|e| e.id.into()).collect();
         let current_ids: HashSet<ExpenseId> = slice.expenses.iter().map(|e| e.id).collect();
 
         let updated = if self.currently_displayed.is_empty()
@@ -353,8 +350,8 @@ mod tests {
     }
 
     #[fixture]
-    fn uuids(expenses: [Expense; 20]) -> Vec<Uuid> {
-        expenses.iter().rev().map(|e| e.id.uuid()).collect()
+    fn ids(expenses: [Expense; 20]) -> Vec<u64> {
+        expenses.iter().rev().map(|e| e.id.into()).collect()
     }
 
     #[fixture]
@@ -368,7 +365,7 @@ mod tests {
     }
 
     #[rstest]
-    fn p_list_derive_initial_view(mut expenses: [Expense; 20], uuids: Vec<Uuid>) {
+    fn p_list_derive_initial_view(mut expenses: [Expense; 20], ids: Vec<u64>) {
         let mut transformer = PlainListTransformer::default();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(Vec::from(expenses.clone())),
@@ -380,7 +377,7 @@ mod tests {
 
         let product = transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         assert_eq!(product.updated, page_items);
         assert_eq!(transformer.latest_hint, None);
         for expense in expenses.iter().take(4) {
@@ -400,7 +397,7 @@ mod tests {
     #[case::last_two(0)]
     fn p_list_derive_hint_not_overlapping_should_send_complete_page(
         expenses: [Expense; 20],
-        uuids: Vec<Uuid>,
+        ids: Vec<u64>,
         #[case] hint_pos: usize,
     ) {
         let mut transformer = PlainListTransformer::default();
@@ -421,7 +418,7 @@ mod tests {
 
         let mut product = transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         product.updated.sort_by(date_ordering);
         page_items.sort_by(date_ordering);
         assert_eq!(product.updated, page_items);
@@ -450,7 +447,7 @@ mod tests {
     #[case::end_overlap3(0, 0, vec![1])]
     fn p_list_derive_hint_overlapping_should_send_partial_page(
         expenses: [Expense; 20],
-        uuids: Vec<Uuid>,
+        ids: Vec<u64>,
         #[case] hint_pos: usize,
         #[case] already_there_pos: usize,
         #[case] expected_updated_indexes: Vec<usize>,
@@ -474,16 +471,16 @@ mod tests {
 
         let mut product = transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         product.updated.sort_by(date_ordering);
         updated.sort_by(date_ordering);
         assert_eq!(product.updated, updated);
 
-        for uuid in updated.iter().map(|item| item.id) {
+        for id in updated.iter().map(|item| item.id) {
             assert!(
                 transformer
                     .currently_displayed
-                    .contains_key(&ExpenseId::from(uuid))
+                    .contains_key(&ExpenseId::from(id))
             );
         }
         assert_prev_ids(&transformer, &expenses);
@@ -496,7 +493,7 @@ mod tests {
     #[case::same_as_old_hint(0, 3, 3)]
     fn p_list_changed_displayed_element_should_send_independently_of_hint(
         mut expenses: [Expense; 20],
-        uuids: Vec<Uuid>,
+        ids: Vec<u64>,
         mut filled_transformer: PlainListTransformer,
         #[case] changed: usize,
         #[case] recv_hint: usize,
@@ -513,9 +510,9 @@ mod tests {
 
         let product = filled_transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         assert_eq!(product.updated.len(), 1);
-        assert_eq!(product.updated[0].id, expenses[changed].id.uuid());
+        assert_eq!(product.updated[0].id, u64::from(expenses[changed].id));
         assert_eq!(product.updated[0].amount, -1);
         assert_prev_ids(&filled_transformer, &expenses);
     }
@@ -537,11 +534,11 @@ mod tests {
     }
 
     #[rstest]
-    fn p_list_derived_hint_represents_non_existing_uuid_should_ignore(
+    fn p_list_derived_hint_represents_non_existing_id_should_ignore(
         expenses: [Expense; 20],
         mut filled_transformer: PlainListTransformer,
     ) {
-        let hint = Some(ExpenseId::from(Uuid::now_v7()));
+        let hint = Some(ExpenseId::from(999));
         filled_transformer.prev_ids = None;
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(Vec::from(expenses.clone())),
@@ -560,7 +557,7 @@ mod tests {
         expenses[10].date = distant_past_ref_date();
         let updated = expenses[10].clone();
         expenses.sort();
-        let uuids: Vec<Uuid> = expenses.iter().rev().map(|e| e.id.uuid()).collect();
+        let ids: Vec<u64> = expenses.iter().rev().map(|e| e.id.into()).collect();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(Vec::from(expenses.clone())),
             view_state: PlainListViewState { hint: None },
@@ -569,7 +566,7 @@ mod tests {
         let products = filled_transformer
             .derive(state)
             .expect("Should generate products");
-        assert_eq!(products.ids, uuids);
+        assert_eq!(products.ids, ids);
         assert_eq!(products.updated, vec![updated.clone().into()]);
         assert_eq!(filled_transformer.currently_displayed[&updated.id], updated);
         assert_prev_ids(&filled_transformer, &expenses);
@@ -586,13 +583,13 @@ mod tests {
         assert_prev_ids(&transformer, &expenses);
 
         let added = Expense::new_default_with(
-            ExpenseId::from(Uuid::now_v7()),
+            ExpenseId::from(100),
             &contemporary_ref_date() + 20.days(),
             Some(-2),
         );
         let mut expenses: Vec<_> = expenses.into();
         expenses.push(added.clone());
-        let uuids: Vec<Uuid> = expenses.iter().rev().map(|e| e.id.uuid()).collect();
+        let ids: Vec<u64> = expenses.iter().rev().map(|e| e.id.into()).collect();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(expenses.clone()),
             view_state: PlainListViewState { hint: None },
@@ -600,7 +597,7 @@ mod tests {
 
         let product = transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         assert_eq!(product.updated, vec![added.clone().into()]);
         assert_eq!(transformer.currently_displayed.len(), PAGE_SIZE + 1);
         assert_eq!(transformer.currently_displayed[&added.id], added);
@@ -617,13 +614,13 @@ mod tests {
         #[case] insert_at: usize,
     ) {
         let added = Expense::new_default_with(
-            ExpenseId::from(Uuid::now_v7()),
+            ExpenseId::from(100),
             &contemporary_ref_date() + (insert_at as i64).days() - 12.hours(),
             Some(-2),
         );
         let mut expenses: Vec<_> = expenses.into();
         expenses.insert(insert_at, added.clone());
-        let uuids: Vec<Uuid> = expenses.iter().rev().map(|e| e.id.uuid()).collect();
+        let ids: Vec<u64> = expenses.iter().rev().map(|e| e.id.into()).collect();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(expenses.clone()),
             view_state: PlainListViewState { hint: None },
@@ -631,7 +628,7 @@ mod tests {
 
         let product = filled_transformer.derive(state).expect("Should be product");
 
-        assert_eq!(product.ids, uuids);
+        assert_eq!(product.ids, ids);
         assert_eq!(product.updated, vec![added.clone().into()]);
         assert_eq!(filled_transformer.currently_displayed[&added.id], added);
         assert_prev_ids(&filled_transformer, &expenses);
@@ -645,7 +642,7 @@ mod tests {
         let hint = Some(expenses[10].id);
         filled_transformer.latest_hint = hint;
         let added = Expense::new_default_with(
-            ExpenseId::from(Uuid::now_v7()),
+            ExpenseId::from(100),
             &contemporary_ref_date() + 20.days(),
             Some(-2),
         );
@@ -668,7 +665,7 @@ mod tests {
         mut filled_transformer: PlainListTransformer,
     ) {
         let added = Expense::new_default_with(
-            ExpenseId::from(Uuid::now_v7()),
+            ExpenseId::from(100),
             &contemporary_ref_date() + 20.days(),
             Some(-2),
         );
@@ -694,7 +691,7 @@ mod tests {
     ) {
         let mut expenses: Vec<_> = expenses.into();
         let removed = expenses.remove(10);
-        let uuids: Vec<Uuid> = expenses.iter().rev().map(|e| e.id.uuid()).collect();
+        let ids: Vec<u64> = expenses.iter().rev().map(|e| e.id.into()).collect();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(expenses.clone()),
             view_state: PlainListViewState { hint: None },
@@ -703,7 +700,7 @@ mod tests {
         let products = filled_transformer
             .derive(state)
             .expect("Should generate products");
-        assert_eq!(products.ids, uuids);
+        assert_eq!(products.ids, ids);
         assert!(products.updated.is_empty());
         assert!(
             !filled_transformer

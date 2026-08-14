@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::action::{Action, WorkingAction};
 use crate::action::ModelAction::StatisticsAllResult;
 use crate::runtime::MoniCommand;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
@@ -11,7 +11,7 @@ use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
 use std::{thread, time::Duration};
 
 #[derive(Debug, PartialEq)]
-pub enum ServiceCommand {
+pub(crate) enum ServiceCommand {
     Persistence(PersistenceCmd),
     Subscribe(Subscription),
 }
@@ -41,12 +41,12 @@ impl EnvironmentCommand for ServiceCommand {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum AsyncCmd {
+pub(crate) enum AsyncCmd {
     StatisticsCalculation(VersionedArc<Vec<Expense>>, Timestamp),
 }
 
 impl AsyncCmd {
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             AsyncCmd::StatisticsCalculation(_, _) => "StatisticsCalculation",
         }
@@ -54,18 +54,15 @@ impl AsyncCmd {
 }
 
 impl AsyncCmd {
-    pub fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + 'static> {
+    pub(crate) fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + 'static> {
         match self {
             AsyncCmd::StatisticsCalculation(expenses, request_time) => Box::new(move || {
-                // Supposedly long data extraction...
                 let version = expenses.version();
                 let len = expenses.len();
                 let amounts: Vec<_> = expenses.iter().map(|e| e.amount).collect();
-
                 drop(expenses);
 
-                // Supposedly even longer calculation...
-                thread::sleep(Duration::from_secs(2));
+                // Let's suppose this is a long calculation worth moving to a different thread...
                 let results = if len > 0 {
                     let acc = StatisticsResults {
                         sum: 0,
@@ -99,29 +96,29 @@ impl AsyncCmd {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Subscription {
+pub(crate) enum Subscription {
     Time(TimeSubscriptionCmd),
     Debounce(DebounceCmd),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TimeSubscriptionCmd {
+pub(crate) enum TimeSubscriptionCmd {
     Watchdog,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum DebounceCmd {
+pub(crate) enum DebounceCmd {
     DelayedSave(DebounceAction),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum DebounceAction {
+pub(crate) enum DebounceAction {
     Bump,
     Cancel,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum PersistenceCmd {
+pub(crate) enum PersistenceCmd {
     CreateOrOpenFile,
     Save(ModelState),
 }
@@ -183,7 +180,7 @@ impl From<DebounceCmd> for MoniCommand {
     }
 }
 
-pub trait DelayedSaveProduct {
+pub(crate) trait DelayedSaveProduct {
     fn with_delayed_save(self) -> Self;
 }
 

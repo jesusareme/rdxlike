@@ -38,7 +38,7 @@ impl Services {
 }
 
 /// Service will most probably own the resources they need to execute actions, on its own thread.
-pub trait Service {
+pub(crate) trait Service {
     type Action: Send + 'static;
     type Context: ?Sized;
     type Cmd;

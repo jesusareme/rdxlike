@@ -1,8 +1,7 @@
 use monilib::{ExpenseCategory, LibClockSource, LibConfig, MoniExpense, MoniLib, MoniLogLevel};
-use rand::{random, RngExt, random_range};
-use std::{thread, time::Duration};
+use rand::random_range;
 use std::error::Error;
-use std::path::PathBuf;
+use std::{thread, time::Duration};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let tmp =  std::env::temp_dir().to_str().unwrap().to_string();
@@ -17,7 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     lib.add_expense(MoniExpense {
         date: None,
-        amount: random_range(-100_000_00..100_000_00),
+        amount: random_range(-MoniExpense::AMOUNT_LIMIT..=MoniExpense::AMOUNT_LIMIT),
         comment: Some("go.rs1".to_string()),
         category: ExpenseCategory::Essential,
     })?;
@@ -26,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     lib.add_expense(MoniExpense {
         date: None,
-        amount: random_range(-100_000_00..100_000_00),
+        amount: random_range(-MoniExpense::AMOUNT_LIMIT..=MoniExpense::AMOUNT_LIMIT),
         comment: Some("go.rs2".to_string()),
         category: ExpenseCategory::Essential,
     })?;
