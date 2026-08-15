@@ -14,7 +14,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::mpsc::{self, Sender},
-    thread::{self, JoinHandle},
+    thread,
 };
 use tracing::{debug, error};
 
@@ -37,12 +37,11 @@ impl Services {
     }
 }
 
-/// Services will most probably own the resources they need to execute actions, on their own thread.
 pub(crate) trait Service {
     type Action: Send + 'static;
     type Context: ?Sized;
     type Cmd;
-    fn execute(&self, to_execute: Self::Cmd);
+    fn execute(&self, to_execute: Self::Cmd) -> Result<(), MoniError>;
     fn chooser(cmd: Self::Cmd, context: &Self::Context) -> Self::Action;
 }
 
@@ -104,8 +103,7 @@ impl PartialEq for PersistenceError {
 }
 
 pub struct PersistenceService {
-    service_sender: Sender<Option<PersistenceCmd>>,
-    thread_handle: JoinHandle<()>,
+    service_sender: Sender<PersistenceCmd>,
 }
 
 impl PersistenceService {
@@ -113,13 +111,13 @@ impl PersistenceService {
         action_sender: &impl MessageSend<Message = MoniMessage>,
         context: impl PersistenceApi + Send + 'static,
     ) -> Result<Self, MoniError> {
-        let (sender, receiver) = mpsc::channel::<Option<PersistenceCmd>>();
+        let (sender, receiver) = mpsc::channel::<PersistenceCmd>();
         let action_sender = action_sender.clone();
         let builder = thread::Builder::new().name("PersistenceService.thread".to_string());
-        let thread_handle = builder.spawn(move || {
+        builder.spawn(move || {
             debug!("PersistenceService started");
-            while let Some(to_execute) = receiver.recv().unwrap() {
-                let action = Self::chooser(to_execute, &context);
+            for persistence_cmd in receiver {
+                let action = Self::chooser(persistence_cmd, &context);
                 if action_sender.send_message(action).is_err() {
                     error!("PersistenceService: Unable to send resulting action");
                     break;
@@ -130,12 +128,7 @@ impl PersistenceService {
 
         Ok(PersistenceService {
             service_sender: sender,
-            thread_handle,
         })
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.thread_handle.is_finished()
     }
 }
 
@@ -187,8 +180,9 @@ impl Service for PersistenceService {
     type Action = Action;
     type Context = dyn PersistenceApi;
     type Cmd = PersistenceCmd;
-    fn execute(&self, to_execute: PersistenceCmd) {
-        self.service_sender.send(Some(to_execute)).unwrap();
+    fn execute(&self, to_execute: PersistenceCmd) -> Result<(), MoniError> {
+        self.service_sender.send(to_execute)?;
+        Ok(())
     }
 
     fn chooser(cmd: Self::Cmd, context: &Self::Context) -> Self::Action {
@@ -196,12 +190,6 @@ impl Service for PersistenceService {
             PersistenceCmd::CreateOrOpenFile => create_or_load_file(context),
             PersistenceCmd::Save(model) => save_state(model, context),
         }
-    }
-}
-
-impl Drop for PersistenceService {
-    fn drop(&mut self) {
-        self.service_sender.send(None).unwrap();
     }
 }
 
