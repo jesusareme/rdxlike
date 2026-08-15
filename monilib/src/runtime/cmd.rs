@@ -1,6 +1,6 @@
 use crate::action::ModelAction::StatisticsAllResult;
-use crate::action::{Action, WorkingAction};
-use crate::runtime::MoniCommand;
+use crate::action::{Action, LibAction, RunningAction, WorkingAction};
+use crate::runtime::{MoniCommand, MoniMessage};
 use crate::runtime::cmd::AsyncCmd::StatisticsCalculation;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::cmd::Subscription::{Debounce, Time};
@@ -9,6 +9,9 @@ use crate::runtime::{Expense, ModelState, MoniProducts, Statistics, StatisticsRe
 use crate::util::{CancellationCheck, VersionedArc};
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
+use rdxlib::util::MessageSender;
+use std::collections::VecDeque;
+use std::panic::UnwindSafe;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -20,16 +23,25 @@ pub(crate) enum ServiceCommand {
 
 impl EnvironmentCommand for ServiceCommand {
     type Environment = Services;
+    type Action = Action;
+    type RuntimeAction = LibAction;
 
-    fn process(self, env: &mut Self::Environment) {
-        match self {
-            ServiceCommand::Persistence(p_cmd) => {
-                env.persistence.execute(p_cmd);
-            }
+    fn process(
+        self,
+        env: &mut Self::Environment,
+        pending: &mut VecDeque<MoniMessage>,
+        _messages_tx: &MessageSender<MoniMessage>,
+    ) {
+        let result = match self {
+            ServiceCommand::Persistence(p_cmd) => env.persistence.execute(p_cmd),
             ServiceCommand::Subscribe(s_cmd) => match s_cmd {
                 Time(cmd) => env.timers.send(cmd.into()),
                 Debounce(cmd) => env.timers.send(cmd.into()),
             },
+        };
+
+        if let Err(error) = result {
+            pending.push_back(RunningAction::Error(error).into());
         }
     }
 }

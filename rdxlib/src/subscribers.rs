@@ -1,9 +1,9 @@
 use crate::Client;
-pub(crate) use crate::error::{InitError, SubscriberError};
+use crate::error::InitError;
+pub use crate::error::SubscriberError;
 use crate::primitives::{OneSlotSender, one_slot_channel};
 use crate::subscribers::ComparableResult::Comparable;
 use enumset::EnumSet;
-use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::thread;
 use std::thread::JoinHandle;

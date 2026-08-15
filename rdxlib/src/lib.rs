@@ -25,7 +25,7 @@ pub trait Client {
     type Action: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
     type RuntimeAction: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
     type Flag: enumset::EnumSetType;
-    type ServiceCommand: EnvironmentCommand;
+    type ServiceCommand: EnvironmentCommand<Action = Self::Action, RuntimeAction = Self::RuntimeAction>;
 }
 
 pub type Reducer<C> = fn(&mut <C as Client>::State, <C as Client>::Action) -> ActionProducts<C>;
@@ -160,7 +160,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
             }
 
             Env(job) => {
-                job.process(services);
+                job.process(services, pending, messages_tx);
             }
         }
     }
@@ -232,12 +232,30 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Clone)]
-    struct TestServiceCommand;
+    enum TestServiceCommand {
+        Increment,
+        IncrementAnd(Vec<TestAction>, Vec<TestAction>),
+    }
     impl EnvironmentCommand for TestServiceCommand {
         type Environment = Rc<Cell<u32>>;
+        type Action = TestAction;
+        type RuntimeAction = TestRuntimeAction;
 
-        fn process(self, env: &mut Self::Environment) {
-            env.update(|c| c + 1)
+        fn process(
+            self,
+            env: &mut Self::Environment,
+            pending: &mut VecDeque<Message<TestAction, TestRuntimeAction>>,
+            messages_tx: &MessageSender<Message<TestAction, TestRuntimeAction>>,
+        ) {
+            env.update(|c| c + 1);
+            if let TestServiceCommand::IncrementAnd(direct, queued) = self {
+                pending.extend(direct.into_iter().map(Into::into));
+                for action in queued {
+                    messages_tx
+                        .send_message(action)
+                        .expect("Send should not fail in tests");
+                }
+            }
         }
     }
 
@@ -572,7 +590,7 @@ mod tests {
         let mut runtime = Runtime::new(config);
         let message = Action(CmdGeneratingAction(
             "services",
-            CmdProduct::Env(TestServiceCommand),
+            CmdProduct::Env(TestServiceCommand::Increment),
         ));
 
         runtime.process_message(message);
@@ -582,6 +600,44 @@ mod tests {
         assert_eq!(runtime.state.len(), 1);
         assert_matches!(runtime.state[0], CmdGeneratingAction("services", _));
 
+        assert_eq!(
+            runtime
+                .messages_rx
+                .try_recv()
+                .expect_err("Should return error, no more pending messages"),
+            TryRecvError::Empty
+        );
+    }
+
+    #[rstest]
+    fn env_cmd_should_execute_its_direct_actions_and_send_its_queued_ones(
+        #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
+    ) {
+        let services_witness = config.services.clone();
+        let mut runtime = Runtime::new(config);
+        let message = Action(CmdGeneratingAction(
+            "services",
+            CmdProduct::Env(TestServiceCommand::IncrementAnd(
+                vec![BasicAction("direct")],
+                vec![BasicAction("queued")],
+            )),
+        ));
+
+        runtime.process_message(message);
+
+        assert_eq!(services_witness.get(), 1);
+
+        assert_eq!(runtime.state.len(), 2);
+        assert_matches!(runtime.state[0], CmdGeneratingAction("services", _));
+        assert_matches!(runtime.state[1], BasicAction("direct"));
+
+        assert_eq!(
+            runtime
+                .messages_rx
+                .try_recv()
+                .expect("Should not fail, next message available"),
+            Action(BasicAction("queued"))
+        );
         assert_eq!(
             runtime
                 .messages_rx

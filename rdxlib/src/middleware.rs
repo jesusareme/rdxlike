@@ -66,9 +66,11 @@ mod tests {
     use crate::cmd::EnvironmentCommand;
     use crate::messages::Message;
     use crate::products::ActionProducts;
+    use crate::util::MessageSender;
     use crate::Client;
     use enumset::EnumSetType;
     use std::cell::RefCell;
+    use std::collections::VecDeque;
     use std::rc::Rc;
     use Log::{Entered, Exited};
 
@@ -108,7 +110,15 @@ mod tests {
     struct EmptyService;
     impl EnvironmentCommand for EmptyService {
         type Environment = ();
-        fn process(self, _: &mut ()) {}
+        type Action = TestAction;
+        type RuntimeAction = TestRuntime;
+        fn process(
+            self,
+            _: &mut (),
+            _: &mut VecDeque<Message<TestAction, TestRuntime>>,
+            _: &MessageSender<Message<TestAction, TestRuntime>>,
+        ) {
+        }
     }
 
     fn witness_reducer(state: &mut Vec<TestAction>, action: TestAction) -> ActionProducts<TestClient> {

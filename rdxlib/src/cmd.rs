@@ -1,12 +1,21 @@
-use std::error::Error;
+use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::panic::UnwindSafe;
 use crate::Client;
+use crate::messages::Message;
+use crate::util::MessageSender;
 
 pub trait EnvironmentCommand {
     type Environment;
+    type Action;
+    type RuntimeAction;
 
-    fn process(self, env: &mut Self::Environment);
+    fn process(
+        self,
+        env: &mut Self::Environment,
+        pending: &mut VecDeque<Message<Self::Action, Self::RuntimeAction>>,
+        messages_tx: &MessageSender<Message<Self::Action, Self::RuntimeAction>>,
+    );
 }
 
 pub struct AsyncTask<A> {
