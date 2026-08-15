@@ -1,4 +1,6 @@
+use std::error::Error;
 use std::fmt::{Debug, Formatter};
+use std::panic::UnwindSafe;
 use crate::Client;
 
 pub trait EnvironmentCommand {
@@ -9,7 +11,7 @@ pub trait EnvironmentCommand {
 
 pub struct AsyncTask<A> {
     pub name: String,
-    pub job: Box<dyn FnOnce() -> A + Send + 'static>,
+    pub job: Box<dyn FnOnce() -> A + UnwindSafe + Send + 'static>,
 }
 
 impl<A> Debug for AsyncTask<A> {

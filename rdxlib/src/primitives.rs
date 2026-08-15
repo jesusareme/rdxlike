@@ -2,13 +2,11 @@ use crate::error::InitError;
 use std::sync::{Condvar, MutexGuard};
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
-use std::{
-    sync::{
-        Arc, Mutex,
-        mpsc::{Sender, channel},
-    },
-    thread,
-};
+use std::{panic, sync::{
+    Arc, Mutex,
+    mpsc::{Sender, channel},
+}, thread};
+use std::panic::UnwindSafe;
 use tracing::{debug, error, warn};
 
 #[derive(PartialEq)]
@@ -406,6 +404,8 @@ impl<T: Send> Iterator for SharedReceiver<T> {
     }
 }
 
+pub(crate) type BoxedThreadPoolJob = Box<dyn FnOnce() + Send + UnwindSafe>;
+
 impl<T: Send> Clone for SharedReceiver<T> {
     fn clone(&self) -> Self {
         SharedReceiver(self.0.clone())
@@ -413,11 +413,11 @@ impl<T: Send> Clone for SharedReceiver<T> {
 }
 
 pub trait JobsDispatcher {
-    fn work_on(&self, job: Box<dyn FnOnce() + Send + 'static>);
+    fn work_on(&self, job: BoxedThreadPoolJob);
 }
 
 pub struct ThreadPool {
-    sender: Option<Sender<Box<dyn FnOnce() + Send>>>,
+    sender: Option<Sender<BoxedThreadPoolJob>>,
     handles: Vec<thread::JoinHandle<()>>,
 }
 
@@ -427,17 +427,18 @@ impl ThreadPool {
             return Err(InitError::InvalidCapacity);
         }
         let mut handles = Vec::with_capacity(capacity);
-        let (tx, rx) = shared_channel::<Box<dyn FnOnce() + Send>>();
+        let (tx, rx) = shared_channel::<BoxedThreadPoolJob>();
 
         for i in 0..capacity {
             let job_rx_thread = rx.clone();
             let builder = thread::Builder::new().name(format!("thread_{i}"));
             let spawned = builder.spawn(move || {
                 loop {
-                    let received = job_rx_thread.recv();
-                    match received {
+                    match job_rx_thread.recv() {
                         Ok(job) => {
-                            job();
+                            if panic::catch_unwind(move || job()).is_err() {
+                                error!("Job in thread {} panicked", i)
+                            }
                         }
                         Err(error) => {
                             error!(
@@ -468,7 +469,7 @@ impl ThreadPool {
 }
 
 fn drop_workers(
-    sender: Option<Sender<Box<dyn FnOnce() + Send>>>,
+    sender: Option<Sender<BoxedThreadPoolJob>>,
     handles: Vec<thread::JoinHandle<()>>,
 ) {
     drop(sender);
@@ -482,7 +483,7 @@ fn drop_workers(
 }
 
 impl JobsDispatcher for ThreadPool {
-    fn work_on(&self, job: Box<dyn FnOnce() + Send + 'static>) {
+    fn work_on(&self, job: BoxedThreadPoolJob) {
         if let Some(sender) = &self.sender
             && let Err(error) = sender.send(job)
         {

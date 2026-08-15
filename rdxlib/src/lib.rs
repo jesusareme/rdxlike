@@ -17,7 +17,7 @@ use enumset::EnumSet;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use subscribers::Subscriber;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use util::MessageSender;
 
 pub trait Client {
@@ -141,18 +141,21 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
             }
 
             Queue(new_work_actions) => {
-                new_work_actions.into_iter().for_each(|a| {
-                    _ = messages_tx.send_message(a).inspect_err(|e| {
-                        error!("Error while sending new actions from Queue command: {e:?}");
-                    });
-                });
+                for action in new_work_actions {
+                    if messages_tx.send_message(action).is_err() {
+                        warn!("Action was never sent because receiver was dropped");
+                        break;
+                    }
+                }
             }
 
             Async(task) => {
                 let messages_tx = messages_tx.clone();
                 jobs_dispatcher.work_on(Box::new(move || {
                     let action = (task.job)();
-                    messages_tx.send_message(action).unwrap(); //todo! control errors
+                    if messages_tx.send_message(action).is_err() {
+                        warn!("Action was never sent because receiver was dropped");
+                    }
                 }));
             }
 
@@ -243,7 +246,7 @@ mod tests {
     }
 
     impl JobsDispatcher for WitnessJobDispatcher {
-        fn work_on(&self, job: Box<dyn FnOnce() + Send + 'static>) {
+        fn work_on(&self, job: BoxedThreadPoolJob) {
             self.called.update(|v| v + 1);
             job()
         }
@@ -292,6 +295,7 @@ mod tests {
     use crate::messages::Message::Action;
     use crate::tests::TestAction::{BasicAction, CmdGeneratingAction, FlagAction};
     use WitnessSubscriberChecks::{Active, Interested, Notify};
+    use crate::primitives::BoxedThreadPoolJob;
 
     impl Default for WitnessSubscriber {
         fn default() -> Self {
