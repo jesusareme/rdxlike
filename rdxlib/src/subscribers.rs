@@ -1,5 +1,5 @@
 use crate::Client;
-use crate::error::InitError;
+pub(crate) use crate::error::{InitError, SubscriberError};
 use crate::primitives::{OneSlotSender, one_slot_channel};
 use crate::subscribers::ComparableResult::Comparable;
 use enumset::EnumSet;
@@ -9,31 +9,6 @@ use std::thread;
 use std::thread::JoinHandle;
 use tracing::debug;
 use uuid::Uuid;
-
-#[derive(Debug)]
-pub enum SubscriberError {
-	MissingState,
-	UnableToNotifySubscriber(Box<dyn Error + 'static>),
-}
-
-impl Display for SubscriberError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-		match self {
-			SubscriberError::MissingState => write!(f, "Missing required state."),
-			SubscriberError::UnableToNotifySubscriber(_) => {
-				write!(f, "Unable to notify subscriber.")
-			}
-		}
-	}
-}
-impl Error for SubscriberError {
-	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		match self {
-			SubscriberError::MissingState => None,
-			SubscriberError::UnableToNotifySubscriber(source) => Some(source.as_ref())
-		}
-	}
-}
 
 pub trait Subscriber {
 	type State;

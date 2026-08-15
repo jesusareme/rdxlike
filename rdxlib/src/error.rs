@@ -31,3 +31,28 @@ impl From<io::Error> for InitError {
         InitError::ThreadSpawn(value)
     }
 }
+
+#[derive(Debug)]
+pub enum SubscriberError {
+    MissingState,
+    UnableToNotifySubscriber(Box<dyn Error + 'static>),
+}
+
+impl Display for SubscriberError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubscriberError::MissingState => write!(f, "Missing required state."),
+            SubscriberError::UnableToNotifySubscriber(_) => {
+                write!(f, "Unable to notify subscriber.")
+            }
+        }
+    }
+}
+impl Error for SubscriberError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            SubscriberError::MissingState => None,
+            SubscriberError::UnableToNotifySubscriber(source) => Some(source.as_ref())
+        }
+    }
+}
