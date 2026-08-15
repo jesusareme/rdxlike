@@ -76,7 +76,7 @@ impl CancellationCheck {
     pub fn is_cancelled(&self) -> bool {
         *self.0.read().unwrap()
     }
-    
+
     pub fn still_working(&self) -> Option<()> {
         (!self.is_cancelled()).then_some(())
     }

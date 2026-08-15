@@ -264,10 +264,15 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
             }
 
             _ => {
+                if state.tasks.statistics_running.is_some() {
+                    // Only one statistics calculation running at any time (just to simplify example)
+                    debug!("Statistics request was ignored as there was a previous one running");
+                    return MoniProducts::none()
+                }
+
                 let cancellation_token = DropCancellation::new(Uuid::new_v4());
                 let cancellation_check = cancellation_token.cancellation_check();
 
-                // This has the effect of cancelling any previous running statistics calculation:
                 state.tasks.statistics_running = Some(cancellation_token);
 
                 MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
@@ -286,11 +291,17 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
 
             if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at)
             {
+                debug!("Statistics calculation was discarded as we have a more up to date version already calculated");
                 return MoniProducts::none();
             }
-
             state.model_state.statistics_all = Some(statistics);
+
             MoniProducts::none().with_dirty(Statistics)
+        }
+
+        ModelAction::CancelStatistics => {
+            state.tasks.statistics_running = None;
+            MoniProducts::none()
         }
 
         ModelAction::AddEveryXInterval(id, interval, action) => {
@@ -306,10 +317,7 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
             }
         }
 
-        ModelAction::CancelStatistics => {
-            state.tasks.statistics_running = None;
-            MoniProducts::none()
-        }
+
     }
 }
 

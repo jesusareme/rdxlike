@@ -220,6 +220,11 @@ impl MoniLib {
 
         out.into()
     }
+    
+    pub fn cancel_statistics(&self) -> Result<(), MoniError> {
+        self.action_sender.send_message(ModelAction::CancelStatistics)?;
+        Ok(())
+    }
 
     pub fn schedule_repeat_expense(
         &self,
