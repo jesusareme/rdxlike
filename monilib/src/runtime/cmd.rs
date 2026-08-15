@@ -48,7 +48,7 @@ impl AsyncCmd {
 }
 
 impl AsyncCmd {
-    pub(crate) fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + 'static> {
+    pub(crate) fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + UnwindSafe + 'static> {
         match self {
             StatisticsCalculation(expenses, request_time, cancellation_check) => {
 
