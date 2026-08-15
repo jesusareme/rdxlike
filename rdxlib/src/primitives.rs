@@ -39,11 +39,13 @@ struct OneSlotCore<T> {
     cvar: Condvar,
 }
 
+fn lock_ignoring_poisoning<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl<T> OneSlotCore<T> {
     fn get_guard(&self) -> MutexGuard<'_, Slot<T>> {
-        self.mutex
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        lock_ignoring_poisoning(&self.mutex)
     }
 }
 
@@ -92,7 +94,6 @@ impl<T> Clone for OneSlotReceiver<T> {
     fn clone(&self) -> Self {
         let mut guard = self.core.get_guard();
         guard.receivers += 1;
-        drop(guard);
         OneSlotReceiver {
             core: Arc::clone(&self.core),
         }
@@ -383,6 +384,7 @@ mod tests_one_slot_channel {
     }
 }
 
+
 pub fn shared_channel<T: Send>() -> (Sender<T>, SharedReceiver<T>) {
     let (sender, receiver) = channel();
     (sender, SharedReceiver(Arc::new(Mutex::new(receiver))))
@@ -392,7 +394,7 @@ pub struct SharedReceiver<T: Send>(Arc<Mutex<Receiver<T>>>);
 
 impl<T: Send> SharedReceiver<T> {
     pub fn recv(&self) -> Result<T, RecvError> {
-        self.0.lock().unwrap().recv()
+        lock_ignoring_poisoning(&self.0).recv()
     }
 }
 
@@ -400,8 +402,7 @@ impl<T: Send> Iterator for SharedReceiver<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let guard = self.0.lock().unwrap();
-        guard.recv().ok()
+        self.recv().ok()
     }
 }
 
