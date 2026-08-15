@@ -1,5 +1,5 @@
 use crate::error::InitError;
-use std::sync::Condvar;
+use std::sync::{Condvar, MutexGuard};
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
 use std::{
@@ -15,6 +15,7 @@ use tracing::{debug, error, warn};
 struct Slot<T> {
     latest: Option<T>,
     senders: usize,
+    receivers: usize,
 }
 
 impl<T> Default for Slot<T> {
@@ -22,6 +23,7 @@ impl<T> Default for Slot<T> {
         Slot {
             latest: None,
             senders: 1,
+            receivers: 1,
         }
     }
 }
@@ -37,13 +39,22 @@ struct OneSlotCore<T> {
     cvar: Condvar,
 }
 
+impl<T> OneSlotCore<T> {
+    fn get_guard(&self) -> MutexGuard<'_, Slot<T>> {
+        self.mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 pub struct OneSlotSender<T> {
     core: Arc<OneSlotCore<T>>,
 }
 
 impl<T> Clone for OneSlotSender<T> {
     fn clone(&self) -> Self {
-        self.core.mutex.lock().unwrap().senders += 1;
+        let mut guard = self.core.get_guard();
+        guard.senders += 1;
         OneSlotSender {
             core: Arc::clone(&self.core),
         }
@@ -52,26 +63,24 @@ impl<T> Clone for OneSlotSender<T> {
 
 impl<T: Send> OneSlotSender<T> {
     pub fn send(&self, new_value: T) -> Result<(), SendError<T>> {
-        match self.core.mutex.lock() {
-            Ok(mut guard) => {
-                guard.latest = Some(new_value);
-                drop(guard);
-                self.core.cvar.notify_all();
-                Ok(())
-            }
-            Err(_) => Err(SendError(new_value)),
+        let mut guard = self.core.get_guard();
+        if guard.receivers == 0 {
+            Err(SendError(new_value))
+        } else {
+            guard.latest = Some(new_value);
+            drop(guard);
+            self.core.cvar.notify_all();
+            Ok(())
         }
     }
 }
 
 impl<T> Drop for OneSlotSender<T> {
     fn drop(&mut self) {
-        _ = self.core.mutex.lock().and_then(|mut guard| {
-            guard.senders -= 1;
-            drop(guard);
-            self.core.cvar.notify_all();
-            Ok(())
-        });
+        let mut guard = self.core.get_guard();
+        guard.senders -= 1;
+        drop(guard);
+        self.core.cvar.notify_all();
     }
 }
 
@@ -81,20 +90,30 @@ pub struct OneSlotReceiver<T> {
 
 impl<T> Clone for OneSlotReceiver<T> {
     fn clone(&self) -> Self {
+        let mut guard = self.core.get_guard();
+        guard.receivers += 1;
+        drop(guard);
         OneSlotReceiver {
             core: Arc::clone(&self.core),
         }
     }
 }
 
+impl<T> Drop for OneSlotReceiver<T> {
+    fn drop(&mut self) {
+        let mut guard = self.core.get_guard();
+        guard.receivers -= 1;
+    }
+}
+
 impl<T> OneSlotReceiver<T> {
     pub fn recv(&self) -> Result<T, RecvError> {
-        let guard = self.core.mutex.lock().map_err(|_| RecvError)?;
+        let guard = self.core.get_guard();
         let mut guard = self
             .core
             .cvar
             .wait_while(guard, |s| !s.is_content_available())
-            .map_err(|_| RecvError)?;
+            .unwrap_or_else(|e| e.into_inner());
 
         guard
             .latest
@@ -103,7 +122,7 @@ impl<T> OneSlotReceiver<T> {
     }
 
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        let mut guard = self.core.mutex.lock().map_err(|_| RecvError)?;
+        let mut guard = self.core.get_guard();
         guard.latest.take().map_or_else(
             || {
                 if guard.senders == 0 {
