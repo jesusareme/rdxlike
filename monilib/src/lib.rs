@@ -16,14 +16,14 @@ pub use crate::inout::{
     MoniValidationErrorCause, PlainListItem,
 };
 pub use crate::runtime::ExpenseCategory;
-use crate::runtime::{MoniMessage, RuntimeEnvironment};
+use crate::runtime::{MoniLibClient, MoniMessage, RuntimeEnvironment};
 use crate::util::ExpenseId;
 use action::{Action, LibAction, ModelAction, RunningAction, WorkingAction};
 use boltffi::{EventSubscription, data, export, ffi_stream};
 use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
-use rdxlib::util::{MessageSend, MessageSender};
+use rdxlib::util::{MessageSend, MessageSender, CancellationHandle};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::{
@@ -97,6 +97,7 @@ impl PlainListViewHandler {
 }
 
 pub struct MoniLib {
+    _cancellation_handle: CancellationHandle<MoniLibClient>,
     action_sender: MessageSender<MoniMessage>,
     clock: Arc<dyn ClockSource + Send + Sync>,
     lib_thread_handle: JoinHandle<()>,
@@ -118,49 +119,45 @@ impl MoniLib {
 
         inout::try_state_path(&path)?;
 
-        let (root_message_tx, message_rx) = mpsc::channel::<MoniMessage>();
-        let dispatcher = MessageSender::new(root_message_tx);
-        let actions_tx = dispatcher.clone();
-
         let clock = match config.clock {
             LibClockSource::System => Arc::new(SystemClockSource),
         };
         let shared_clock = clock.clone();
 
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), MoniError>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(CancellationHandle<MoniLibClient>, MessageSender<MoniMessage>), MoniError>>();
 
         let builder = Builder::new().name("messages".to_string());
-        let actions_handler = builder.spawn(move || {
-            let config = RuntimeEnvironment {
-                messages_rx: message_rx,
-                actions_tx,
+        let lib_thread_handle = builder.spawn(move || {
+            let env = RuntimeEnvironment {
                 logging_enabled_pre_action: true,
                 logging_enabled_post_action: true,
                 path,
                 clock: shared_clock,
             };
-            match runtime::new(config) {
-                Ok(runtime) => {
-                    if ready_tx.send(Ok(())).is_err() {
+            match runtime::new(env) {
+                Ok((runtime_init, sender)) => {
+                    if ready_tx.send(Ok((runtime_init.handle, sender))).is_err() {
                         error!("Error while trying to response back after successful runtime init");
                         return;
                     }
-                    runtime.run();
+                    runtime_init.runtime.run();
                 }
                 Err(error) => {
                     _ = ready_tx.send(Err(error));
                 }
             }
+            info!("MoniLib run loop ended");
         })?;
 
-        ready_rx
+        let (_cancellation_handle, action_sender) = ready_rx
             .recv()
             .map_err(|_| MoniError::from(LibErrorCause::Threading))??;
 
         Ok(MoniLib {
-            action_sender: dispatcher,
+            _cancellation_handle,
+            action_sender,
             clock,
-            lib_thread_handle: actions_handler,
+            lib_thread_handle,
         })
     }
 

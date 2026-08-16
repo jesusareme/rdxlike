@@ -19,7 +19,6 @@ use services::Services;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
@@ -35,7 +34,7 @@ use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
 use rdxlib::util::{MessageSend, MessageSender};
-use rdxlib::{Client, Runtime, RuntimeConfig};
+use rdxlib::{Client, RuntimeBuilder, RuntimeConfig, RuntimeInit};
 
 use crate::action::Action::Init;
 use crate::action::LibSubscription;
@@ -73,16 +72,17 @@ pub enum Dirty {
 }
 
 pub struct RuntimeEnvironment {
-    pub messages_rx: Receiver<MoniMessage>,
-    pub actions_tx: MessageSender<MoniMessage>,
     pub logging_enabled_pre_action: bool,
     pub logging_enabled_post_action: bool,
     pub path: String,
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniError> {
-    let environment = Services::new(&config.actions_tx, config.path, &config.clock)?;
+pub fn new(config: RuntimeEnvironment) -> Result<(RuntimeInit<MoniLibClient>, MessageSender<MoniMessage>), MoniError> {
+    let builder = RuntimeBuilder::new();
+
+    let sender = builder.create_sender();
+    let environment = Services::new(&sender, config.path, &config.clock)?;
 
     let funs = vec![
         MoniMiddleware::Logger {
@@ -94,7 +94,7 @@ pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniErr
 
     let state = State::default();
 
-    config.actions_tx.send_message(Init)?;
+    sender.send_message(Init)?;
 
     let runtime_cfg = RuntimeConfig {
         services: environment,
@@ -103,13 +103,11 @@ pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniErr
         reducer,
         runtime_reducer,
         jobs_dispatcher: ThreadPool::new(8)?,
-        messages_rx: config.messages_rx,
-        messages_tx: config.actions_tx,
     };
 
     debug!("MoniLib ready to run...");
 
-    Ok(Runtime::new(runtime_cfg))
+    Ok((builder.create_runtime(runtime_cfg), sender))
 }
 
 fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {

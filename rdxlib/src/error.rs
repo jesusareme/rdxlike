@@ -6,6 +6,7 @@ use std::io;
 pub enum InitError {
     ThreadSpawn(io::Error),
     InvalidCapacity,
+    NoLongerRunning,
 }
 
 impl Display for InitError {
@@ -13,6 +14,7 @@ impl Display for InitError {
         match self {
             InitError::ThreadSpawn(source) => write!(f, "Unable to spawn thread: {source}"),
             InitError::InvalidCapacity => write!(f, "Capacity needs to be greater than zero"),
+            InitError::NoLongerRunning => write!(f, "Runtime already cancelled"),
         }
     }
 }
@@ -21,7 +23,7 @@ impl Error for InitError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             InitError::ThreadSpawn(source) => Some(source),
-            InitError::InvalidCapacity => None,
+            InitError::InvalidCapacity | InitError::NoLongerRunning  => None,
         }
     }
 }

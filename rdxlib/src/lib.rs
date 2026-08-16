@@ -12,10 +12,11 @@ use crate::messages::Message;
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::primitives::{JobsDispatcher, ThreadPool};
 use crate::products::{ActionProducts, RuntimeProducts};
-use crate::util::MessageSend;
+use crate::util::{MessageSend, CancellationHandle};
 use enumset::EnumSet;
 use std::collections::VecDeque;
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{Receiver, Sender};
 use subscribers::Subscriber;
 use tracing::{error, info, warn};
 use util::MessageSender;
@@ -39,8 +40,6 @@ pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
     pub reducer: Reducer<C>,
     pub runtime_reducer: RuntimeReducer<C>,
     pub jobs_dispatcher: JD,
-    pub messages_rx: Receiver<Message<C::Action, C::RuntimeAction>>,
-    pub messages_tx: MessageSender<Message<C::Action, C::RuntimeAction>>,
 }
 
 #[allow(clippy::struct_field_names)]
@@ -55,20 +54,55 @@ pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
     jobs_dispatcher: JD,
 }
 
-impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
-    pub fn new(config: RuntimeConfig<C, JD>) -> Self {
-        Runtime {
+pub struct RuntimeBuilder<C: Client> {
+    sender: Arc<Sender<Message<C::Action, C::RuntimeAction>>>,
+    receiver: Receiver<Message<C::Action, C::RuntimeAction>>,
+}
+
+pub struct RuntimeInit<C: Client, JD: JobsDispatcher = ThreadPool> {
+    pub runtime: Runtime<C, JD>,
+    pub handle: CancellationHandle<C>,
+}
+
+impl<C: Client> RuntimeBuilder<C> {
+    pub fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<Message<C::Action, C::RuntimeAction>>();
+
+        RuntimeBuilder {
+            sender: Arc::new(sender),
+            receiver,
+        }
+    }
+
+    pub fn create_sender(&self) -> MessageSender<Message<C::Action, C::RuntimeAction>> {
+        MessageSender::new(&self.sender)
+    }
+
+    pub fn create_runtime<JD: JobsDispatcher>(
+        self,
+        config: RuntimeConfig<C, JD>,
+    ) -> RuntimeInit<C, JD> {
+        let sender = self.create_sender();
+        let handle = CancellationHandle::new(self.sender);
+        let runtime = Runtime {
             services: config.services,
             state: config.state,
             middlewares: MiddlewareStore::new(config.middlewares, config.reducer),
             subscribers: vec![],
-            messages_rx: config.messages_rx,
-            messages_tx: config.messages_tx,
+            messages_rx: self.receiver,
+            messages_tx: sender,
             runtime_reducer: config.runtime_reducer,
             jobs_dispatcher: config.jobs_dispatcher,
+        };
+
+        RuntimeInit {
+            runtime,
+            handle,
         }
     }
+}
 
+impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
     pub fn run(mut self) {
         info!("Started run loop for RdxLib...");
 
@@ -178,7 +212,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::mpsc::TryRecvError;
-    use std::sync::{Arc, RwLock, mpsc};
+    use std::sync::{Arc, RwLock};
 
     struct TestClient;
     impl Client for TestClient {
@@ -357,16 +391,6 @@ mod tests {
         }
     }
 
-    type MessagingPair = (
-        MessageSender<Message<TestAction, TestRuntimeAction>>,
-        Receiver<Message<TestAction, TestRuntimeAction>>,
-    );
-    #[fixture]
-    fn sender_receiver() -> MessagingPair {
-        let (sender, receiver) = mpsc::channel();
-        (MessageSender::new(sender), receiver)
-    }
-
     fn witness_reducer(
         state: &mut Vec<TestAction>,
         action: TestAction,
@@ -455,10 +479,8 @@ mod tests {
     fn config(
         #[default(witness_reducer)] reducer: Reducer<TestClient>,
         #[default(empty_runtime_reducer)] runtime_reducer: RuntimeReducer<TestClient>,
-        sender_receiver: MessagingPair,
         state: Vec<TestAction>,
     ) -> RuntimeConfig<TestClient, WitnessJobDispatcher> {
-        let (messages_tx, messages_rx) = sender_receiver;
         RuntimeConfig {
             services: Default::default(),
             state,
@@ -468,9 +490,16 @@ mod tests {
             jobs_dispatcher: WitnessJobDispatcher {
                 called: Default::default(),
             },
-            messages_rx,
-            messages_tx,
         }
+    }
+
+    type TestRuntime = Runtime<TestClient, WitnessJobDispatcher>;
+
+    fn started_runtime(
+        config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
+    ) -> (TestRuntime, CancellationHandle<TestClient>) {
+        let RuntimeInit { runtime, handle } = RuntimeBuilder::new().create_runtime(config);
+        (runtime, handle)
     }
 
     #[rstest]
@@ -482,7 +511,7 @@ mod tests {
             messages: witness.clone(),
         }));
 
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         runtime.process_message(Action(BasicAction("basic")));
 
         assert_eq!(*witness.borrow(), vec![BasicAction("basic")]);
@@ -493,7 +522,7 @@ mod tests {
     fn direct_command_side_fx_should_execute_product_action(
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         // An action that will generate a direct command with a pair of (BasicAction) actions as product.
         let sub_action = CmdGeneratingAction(
             "second",
@@ -518,7 +547,7 @@ mod tests {
     fn queue_command_side_fx_should_not_execute_product_action_but_send_it(
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         // An action that will generate a queued command with a pair of (BasicAction) actions as product.
         let sub_action = CmdGeneratingAction(
             "second",
@@ -562,7 +591,7 @@ mod tests {
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
         let job_witness = config.jobs_dispatcher.called.clone();
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         let message = Action(CmdGeneratingAction(
             "async",
             CmdProduct::Async(Box::new(BasicAction("async_result"))),
@@ -595,7 +624,7 @@ mod tests {
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
         let services_witness = config.services.clone();
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         let message = Action(CmdGeneratingAction(
             "services",
             CmdProduct::Env(TestServiceCommand::Increment),
@@ -622,7 +651,7 @@ mod tests {
         #[with(cmd_producing_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) {
         let services_witness = config.services.clone();
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         let message = Action(CmdGeneratingAction(
             "services",
             CmdProduct::Env(TestServiceCommand::IncrementAnd(
@@ -661,7 +690,7 @@ mod tests {
     ) {
         let subscriber = WitnessSubscriber::default();
         let op_witness = subscriber.operations.clone();
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         runtime.subscribers.push(Box::new(subscriber));
 
         let action: Vec<TestAction> = EnumSet::<TestFlag>::all()
@@ -706,7 +735,7 @@ mod tests {
         let subscriber = WitnessSubscriber::default();
         let witness_op = subscriber.operations.clone();
 
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         runtime.process_message(Message::Runtime(TestRuntimeAction::CreateSubscriber(
             subscriber,
         )));
@@ -725,7 +754,7 @@ mod tests {
             WitnessJobDispatcher,
         >,
     ) {
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         let indirect_action =
             CmdGeneratingAction("indirect", CmdProduct::Direct(vec![BasicAction("3")]));
         let resulting_actions = vec![BasicAction("1"), BasicAction("2"), indirect_action];
@@ -759,7 +788,7 @@ mod tests {
             ..WitnessSubscriber::default()
         };
         let op_witness = subscriber.operations.clone();
-        let mut runtime = Runtime::new(config);
+        let (mut runtime, _handle) = started_runtime(config);
         runtime.subscribers.push(Box::new(subscriber));
 
         runtime.process_message(Action(BasicAction("basic")));
