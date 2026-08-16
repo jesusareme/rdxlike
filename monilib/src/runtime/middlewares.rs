@@ -17,7 +17,7 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
         action: Action,
         mut next: Next<MoniLibClient>,
     ) -> MoniProducts {
-        use MoniMiddleware::{Logger, Clock};
+        use MoniMiddleware::{Clock, Logger};
         match self {
             Logger { prev, post } => {
                 if *prev {
@@ -46,7 +46,7 @@ mod tests {
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
     use crate::runtime::cmd::DelayedSaveProduct;
     use crate::runtime::{AppState, Dirty, ModelState};
-    use crate::testing::{contemporary_ref_date, StuckClock};
+    use crate::testing::{StuckClock, contemporary_ref_date};
     use jiff::Zoned;
     use rdxlib::cmd::Cmd;
     use rdxlib::middleware::MiddlewareStore;
@@ -157,4 +157,3 @@ mod tests {
         assert_eq!(state.running.time, contemporary_ref_date());
     }
 }
-

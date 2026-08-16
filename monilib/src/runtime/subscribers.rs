@@ -171,7 +171,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     type Product = MoniExpensePlainListSnapshot;
 
     fn interested_in(offered: &EnumSet<Dirty>) -> bool {
-        use Dirty::{FinancesCurrentMonth, FinancesBeforeThisMonth, Views};
+        use Dirty::{FinancesBeforeThisMonth, FinancesCurrentMonth, Views};
         !offered
             .intersection(FinancesCurrentMonth | FinancesBeforeThisMonth | Views)
             .is_empty()

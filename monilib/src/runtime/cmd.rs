@@ -1,11 +1,11 @@
 use crate::action::ModelAction::StatisticsAllResult;
 use crate::action::{Action, LibAction, RunningAction, WorkingAction};
-use crate::runtime::{MoniCommand, MoniMessage};
 use crate::runtime::cmd::AsyncCmd::StatisticsCalculation;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::cmd::Subscription::{Debounce, Time};
 use crate::runtime::services::{Service, Services};
 use crate::runtime::{Expense, ModelState, MoniProducts, Statistics, StatisticsResults};
+use crate::runtime::{MoniCommand, MoniMessage};
 use crate::util::{CancellationCheck, VersionedArc};
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
@@ -63,7 +63,6 @@ impl AsyncCmd {
     pub(crate) fn into_job(self) -> Box<dyn FnOnce() -> Action + Send + UnwindSafe + 'static> {
         match self {
             StatisticsCalculation(expenses, request_time, cancellation_check) => {
-
                 fn calculate_statistics(
                     expenses: VersionedArc<Vec<Expense>>,
                     request_time: Timestamp,
@@ -79,7 +78,11 @@ impl AsyncCmd {
                     // Let's suppose this is a long calculation worth moving to a different thread...
                     let results = (len > 0).then(|| {
                         amounts.into_iter().fold(
-                            StatisticsResults { sum: 0, max_expense: i64::MIN, min_expense: i64::MAX },
+                            StatisticsResults {
+                                sum: 0,
+                                max_expense: i64::MIN,
+                                min_expense: i64::MAX,
+                            },
                             |mut st, a| {
                                 st.sum += a;
                                 st.max_expense = st.max_expense.max(a);
@@ -100,7 +103,11 @@ impl AsyncCmd {
                 }
 
                 Box::new(move || {
-                    StatisticsAllResult(calculate_statistics(expenses, request_time, &cancellation_check))
+                    StatisticsAllResult(calculate_statistics(
+                        expenses,
+                        request_time,
+                        &cancellation_check,
+                    ))
                     .into()
                 })
             }

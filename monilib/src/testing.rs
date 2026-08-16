@@ -60,15 +60,15 @@ impl ClockSource for StuckClock {
     }
 
     fn now_instant(&self) -> Instant {
-        panic!(
-            "StuckClock not meant to be used for instant time"
-        )
+        panic!("StuckClock not meant to be used for instant time")
     }
 }
 
 impl Default for StuckClock {
     fn default() -> Self {
-        StuckClock { stuck_at: contemporary_ref_date() }
+        StuckClock {
+            stuck_at: contemporary_ref_date(),
+        }
     }
 }
 
@@ -78,9 +78,7 @@ pub struct StuckInstantClock {
 
 impl ClockSource for StuckInstantClock {
     fn now_civil(&self) -> Zoned {
-        panic!(
-            "StuckInstantClock not meant to be used for civil time"
-        )
+        panic!("StuckInstantClock not meant to be used for civil time")
     }
 
     fn now_instant(&self) -> Instant {
@@ -90,7 +88,8 @@ impl ClockSource for StuckInstantClock {
 
 impl Default for StuckInstantClock {
     fn default() -> Self {
-        StuckInstantClock { stuck_at: Instant::now() }
+        StuckInstantClock {
+            stuck_at: Instant::now(),
+        }
     }
 }
-

@@ -1,7 +1,11 @@
 use crate::inout::{ExpenseAddIntent, MoniStatistics};
 use crate::runtime::{MoniMessage, Statistics};
 use crate::util::ExpenseId;
-use crate::{MoniError, MoniExpensePlainListSnapshot, inout::LibOutput, runtime::{Expense, PersistenceError}};
+use crate::{
+    MoniError, MoniExpensePlainListSnapshot,
+    inout::LibOutput,
+    runtime::{Expense, PersistenceError},
+};
 use rdxlib::messages::Message;
 use rdxlib::subscribers::ViewId;
 use std::time::Duration;
@@ -45,7 +49,6 @@ pub(crate) enum RunningAction {
     ListViewHint(ViewId, ExpenseId),
     ListViewPrepare(ViewId),
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModelAction {

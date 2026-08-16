@@ -39,6 +39,7 @@ use rdxlib::{Client, Runtime, RuntimeConfig};
 
 use crate::action::Action::Init;
 use crate::action::LibSubscription;
+use crate::action::LibSubscription::{Errors, PlainListView, StatisticsSub};
 #[cfg(test)]
 use crate::testing::ref_id;
 use boltffi::data;
@@ -46,7 +47,6 @@ use rdxlib::middleware::ChainableMiddleware;
 #[cfg(test)]
 use std::cmp::Ordering;
 use uuid::Uuid;
-use crate::action::LibSubscription::{Errors, PlainListView, StatisticsSub};
 
 pub(crate) struct MoniLibClient;
 impl Client for MoniLibClient {

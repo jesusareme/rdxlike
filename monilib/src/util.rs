@@ -1,12 +1,12 @@
 use jiff::Zoned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::PoisonError;
 use std::time::Instant;
 use std::{
     ops::Deref,
     sync::{Arc, RwLock},
 };
-use std::sync::PoisonError;
 use uuid::Uuid;
 
 pub trait ClockSource {

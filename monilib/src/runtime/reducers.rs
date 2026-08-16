@@ -1,4 +1,9 @@
-use super::{cmd::{PersistenceCmd, DelayedSaveProduct, AsyncCmd, TimeSubscriptionCmd}, debug, State, MoniProducts, ModelState, AppState, EnumSet, MoniError, RunningState, RunningAction, Dirty, PlainListViewState, Zoned, ModelAction, Expense, MoniDomainError, Uuid};
+use super::{
+    AppState, Dirty, EnumSet, Expense, ModelAction, ModelState, MoniDomainError, MoniError,
+    MoniProducts, PlainListViewState, RunningAction, RunningState, State, Uuid, Zoned,
+    cmd::{AsyncCmd, DelayedSaveProduct, PersistenceCmd, TimeSubscriptionCmd},
+    debug,
+};
 use crate::LibErrorCause;
 use crate::action::WorkingAction::{Model, Save, SuccessfulSave};
 use crate::inout::ExpenseAddIntent;
@@ -48,23 +53,21 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                 MoniProducts::none()
                 //todo!
             }
-            AppState::Working(model) => {
-                match action {
-                    Save => MoniProducts::cmds(vec![
-                        PersistenceCmd::Save(model.clone()).into(),
-                        DelayedSave(Cancel).into(),
-                    ]),
-                    SuccessfulSave => {
-                        debug!("Successful SAVE!");
-                        MoniProducts::none()
-                    }
-
-                    Model(action) => reducer_model(
-                        &mut ClockedModelStateView::new(model, &mut state.running),
-                        action,
-                    ),
+            AppState::Working(model) => match action {
+                Save => MoniProducts::cmds(vec![
+                    PersistenceCmd::Save(model.clone()).into(),
+                    DelayedSave(Cancel).into(),
+                ]),
+                SuccessfulSave => {
+                    debug!("Successful SAVE!");
+                    MoniProducts::none()
                 }
-            }
+
+                Model(action) => reducer_model(
+                    &mut ClockedModelStateView::new(model, &mut state.running),
+                    action,
+                ),
+            },
         },
     }
 }
@@ -143,12 +146,13 @@ fn reducer_model(state: &mut ClockedModelStateView, action: ModelAction) -> Moni
                 MoniProducts::none()
             }
         }
-
-
     }
 }
 
-fn add_expense(state: &mut ClockedModelStateView, expense_intent: ExpenseAddIntent) -> MoniProducts {
+fn add_expense(
+    state: &mut ClockedModelStateView,
+    expense_intent: ExpenseAddIntent,
+) -> MoniProducts {
     let first_of_month = state
         .time
         .first_of_month()
@@ -312,17 +316,18 @@ fn receive_statistics(
 mod reducer_model_test {
     use super::*;
     use crate::MoniErrorType;
-    use crate::runtime::{ExpenseCategory, Ids, LongLivingTasks};
-    use crate::util::VersionedArc;
     use crate::inout::ExpenseAddIntent;
     use crate::runtime::ExpenseCategory::*;
     use crate::runtime::cmd::DebounceAction::Bump;
     use crate::runtime::cmd::DebounceCmd::DelayedSave;
     use crate::runtime::cmd::ServiceCommand::Subscribe;
     use crate::runtime::cmd::Subscription::{Debounce, Time};
+    use crate::runtime::{ExpenseCategory, Ids, LongLivingTasks};
     use crate::testing::{
         alternative_ref_uuid, contemporary_ref_date, ordered_by_index_map, ref_uuid,
     };
+    use crate::util::ExpenseId;
+    use crate::util::VersionedArc;
     use itertools::Itertools;
     use jiff::{Span, ToSpan};
     use proptest::prelude::*;
@@ -331,7 +336,6 @@ mod reducer_model_test {
     use rstest::rstest;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
-    use crate::util::ExpenseId;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();
