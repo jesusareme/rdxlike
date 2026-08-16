@@ -109,18 +109,23 @@ impl<T> Drop for OneSlotReceiver<T> {
 
 impl<T> OneSlotReceiver<T> {
     pub fn recv(&self) -> Result<T, RecvError> {
-        let guard = self.core.get_guard();
-        let mut guard = self
-            .core
-            .cvar
-            .wait_while(guard, |s| !s.is_content_available())
-            .unwrap_or_else(PoisonError::into_inner);
+        loop {
+            let guard = self.core.get_guard();
+            let mut guard = self
+                .core
+                .cvar
+                .wait_while(guard, |s| !s.is_content_available())
+                .unwrap_or_else(PoisonError::into_inner);
 
-        guard
-            .latest
-            .take()
-            .ok_or(RecvError) // todo! fix not necessarily error! maybe several woke up and just one got the available value!
+            if let Some(available) = guard.latest.take() {
+                return Ok(available)
+            }
+            if guard.senders == 0 {
+                return Err(RecvError)
+            }
+        }
     }
+
     // todo! review for multiple receivers and doc
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut guard = self.core.get_guard();
