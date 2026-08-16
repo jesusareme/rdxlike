@@ -1,9 +1,9 @@
-use std::collections::VecDeque;
-use std::fmt::{Debug, Formatter};
-use std::panic::UnwindSafe;
 use crate::Client;
 use crate::messages::Message;
 use crate::util::MessageSender;
+use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
+use std::panic::UnwindSafe;
 
 pub trait EnvironmentCommand {
     type Environment;
@@ -27,7 +27,7 @@ impl<A> Debug for AsyncTask<A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AsyncTask")
             .field("name", &self.name)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -37,8 +37,7 @@ impl<A> PartialEq for AsyncTask<A> {
     }
 }
 
-pub enum Cmd<C: Client>
-{
+pub enum Cmd<C: Client> {
     Direct(Vec<C::Action>),
     Queue(Vec<C::Action>),
     Async(AsyncTask<C::Action>),
@@ -48,11 +47,11 @@ pub enum Cmd<C: Client>
 impl<C: Client> PartialEq for Cmd<C>
 where
     C::Action: PartialEq,
-    C::ServiceCommand: PartialEq {
+    C::ServiceCommand: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Cmd::Direct(a), Cmd::Direct(b)) => a == b,
-            (Cmd::Queue(a), Cmd::Queue(b)) => a == b,
+            (Cmd::Direct(a), Cmd::Direct(b)) | (Cmd::Queue(a), Cmd::Queue(b)) => a == b,
             (Cmd::Async(a), Cmd::Async(b)) => a == b,
             (Cmd::Env(a), Cmd::Env(b)) => a == b,
             _ => false,
@@ -63,7 +62,8 @@ where
 impl<C: Client> Debug for Cmd<C>
 where
     C::Action: Debug,
-    C::ServiceCommand: Debug {
+    C::ServiceCommand: Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Cmd::Direct(actions) => f.debug_tuple("Direct").field(actions).finish(),

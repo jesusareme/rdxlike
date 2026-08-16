@@ -17,8 +17,8 @@ pub use crate::inout::{
 pub use crate::runtime::ExpenseCategory;
 use crate::runtime::{MoniMessage, RuntimeEnvironment};
 use crate::util::ExpenseId;
-use action::*;
-use boltffi::{EventSubscription, data, export, ffi_stream};
+use action::{Action, LibAction, RunningAction, ModelAction, WorkingAction};
+use boltffi::{data, export, ffi_stream, EventSubscription};
 use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
@@ -33,6 +33,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, SystemClockSource};
 use uuid::Uuid;
+use crate::action::LibSubscription;
 
 #[data]
 #[derive(Clone, Debug)]
@@ -83,12 +84,11 @@ impl PlainListViewHandler {
     pub fn subscribe(&self) -> Arc<EventSubscription<MoniExpensePlainListSnapshot>> {
         let out = LibOutput::new(256);
 
-        self.action_sender
-            .send_message(LibAction::PlainListViewSubscription(
-                self.token,
-                out.clone(),
-            ))
-            .expect("TODO: panic message");
+        if self.action_sender
+            .send_message(LibSubscription::PlainListView(self.token, out.clone()))
+            .is_err() {
+            error!("Unable to subscribe, communication broken with library.");
+        }
 
         out.into()
     }
@@ -109,7 +109,7 @@ impl MoniLib {
             .inspect_err(|e| {
                 warn!(
                     "Unable to initialize logging, maybe MoniLib init called more than once?: {e:?}"
-                )
+                );
             });
 
         info!("Hi from MoniLib!");
@@ -162,6 +162,7 @@ impl MoniLib {
         })
     }
 
+    #[must_use]
     pub fn create_plain_list_view(&self) -> PlainListViewHandler {
         PlainListViewHandler {
             token: Uuid::now_v7().into(),
@@ -203,9 +204,11 @@ impl MoniLib {
     pub fn errors(&self) -> Arc<EventSubscription<Vec<MoniError>>> {
         let out = LibOutput::new(8);
 
-        self.action_sender
-            .send_message(LibAction::ErrorsSubscription(out.clone()))
-            .expect("TODO: panic message");
+        if self.action_sender
+            .send_message(LibSubscription::Errors(out.clone()))
+            .is_err() {
+            error!("Unable to subscribe, communication broken with library.");
+        }
 
         out.into()
     }
@@ -214,9 +217,11 @@ impl MoniLib {
     pub fn statistics(&self) -> Arc<EventSubscription<MoniStatistics>> {
         let out = LibOutput::new(8);
 
-        self.action_sender
-            .send_message(LibAction::StatisticsSubscription(out.clone()))
-            .expect("TODO: panic message");
+        if self.action_sender
+            .send_message(LibSubscription::StatisticsSub(out.clone()))
+            .is_err() {
+            error!("Unable to subscribe, communication broken with library.");
+        }
 
         out.into()
     }
@@ -249,6 +254,7 @@ impl MoniLib {
         Ok(())
     }
 
+    #[must_use]
     pub fn has_finished(&self) -> bool {
         self.lib_thread_handle.is_finished()
     }

@@ -4,6 +4,8 @@ use std::sync::mpsc::Sender;
 pub trait MessageSend: Clone + Send + 'static {
 	type Message: Send + 'static;
 
+	/// # Errors
+	/// Will return `Err` if the message destinatary is no longer available.
 	fn send_message(&self, message: impl Into<Self::Message>) -> Result<(), SendError<Self::Message>>;
 }
 
@@ -12,6 +14,7 @@ pub struct MessageSender<M> {
 }
 
 impl<M> MessageSender<M> {
+	#[must_use]
 	pub fn new(tx: Sender<M>) -> Self {
 		MessageSender { tx }
 	}

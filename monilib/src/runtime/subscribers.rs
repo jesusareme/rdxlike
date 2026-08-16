@@ -60,21 +60,21 @@ impl ViewTransformer<MoniLibClient> for ErrorsViewTransformer {
         let mut new_errors = vec![];
         if let Some(last_processed_id) = self.last_consumed_id {
             new_errors.extend(slice.into_iter().rev().map_while(|error| {
-                if error.id != last_processed_id {
-                    Some(error)
-                } else {
+                if error.id == last_processed_id {
                     None
+                } else {
+                    Some(error)
                 }
             }));
         } else {
             new_errors = slice;
         }
 
-        if new_errors.len() > 0 {
+        if new_errors.is_empty() {
+            None
+        } else {
             self.last_consumed_id = Some(last);
             Some(new_errors)
-        } else {
-            None
         }
     }
 }
@@ -171,7 +171,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
     type Product = MoniExpensePlainListSnapshot;
 
     fn interested_in(offered: &EnumSet<Dirty>) -> bool {
-        use Dirty::*;
+        use Dirty::{FinancesCurrentMonth, FinancesBeforeThisMonth, Views};
         !offered
             .intersection(FinancesCurrentMonth | FinancesBeforeThisMonth | Views)
             .is_empty()
@@ -251,7 +251,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
                         updated.push(expense.clone().into());
                     }
                 }
-            };
+            }
 
             //Detect those items no longer present and remove them
             let displayed_ids: HashSet<ExpenseId> =
@@ -273,7 +273,7 @@ impl ViewTransformer<MoniLibClient> for PlainListTransformer {
                 };
                 if current != recent {
                     self.currently_displayed.insert(id, recent.clone());
-                    updated.push(recent.clone().into())
+                    updated.push(recent.clone().into());
                 }
             }
 

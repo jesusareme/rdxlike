@@ -1,5 +1,5 @@
 use crate::error::InitError;
-use std::sync::{Condvar, MutexGuard};
+use std::sync::{Condvar, MutexGuard, PoisonError};
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
 use std::{panic, sync::{
@@ -28,7 +28,7 @@ impl<T> Default for Slot<T> {
 
 impl<T> Slot<T> {
     fn is_content_available(&self) -> bool {
-        matches!(self.latest, Some(_)) || self.senders == 0
+        self.latest.is_some() || self.senders == 0
     }
 }
 
@@ -38,7 +38,7 @@ struct OneSlotCore<T> {
 }
 
 fn lock_ignoring_poisoning<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl<T> OneSlotCore<T> {
@@ -62,6 +62,8 @@ impl<T> Clone for OneSlotSender<T> {
 }
 
 impl<T: Send> OneSlotSender<T> {
+    /// # Errors
+    /// Will return `Err` if all receiving end objects are dropped.
     pub fn send(&self, new_value: T) -> Result<(), SendError<T>> {
         let mut guard = self.core.get_guard();
         if guard.receivers == 0 {
@@ -112,14 +114,14 @@ impl<T> OneSlotReceiver<T> {
             .core
             .cvar
             .wait_while(guard, |s| !s.is_content_available())
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(PoisonError::into_inner);
 
         guard
             .latest
             .take()
-            .ok_or(RecvError)
+            .ok_or(RecvError) // todo! fix not necessarily error! maybe several woke up and just one got the available value!
     }
-
+    // todo! review for multiple receivers and doc
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut guard = self.core.get_guard();
         guard.latest.take().map_or_else(
@@ -143,6 +145,7 @@ impl<T> Iterator for OneSlotReceiver<T> {
     }
 }
 
+#[must_use]
 pub fn one_slot_channel<T: Send>() -> (OneSlotSender<T>, OneSlotReceiver<T>) {
     let core = OneSlotCore {
         mutex: Mutex::new(Slot::default()),
@@ -382,7 +385,7 @@ mod tests_one_slot_channel {
     }
 }
 
-
+#[must_use]
 pub fn shared_channel<T: Send>() -> (Sender<T>, SharedReceiver<T>) {
     let (sender, receiver) = channel();
     (sender, SharedReceiver(Arc::new(Mutex::new(receiver))))
@@ -391,6 +394,8 @@ pub fn shared_channel<T: Send>() -> (Sender<T>, SharedReceiver<T>) {
 pub struct SharedReceiver<T: Send>(Arc<Mutex<Receiver<T>>>);
 
 impl<T: Send> SharedReceiver<T> {
+    /// # Errors
+    /// Will return `Err` if sender is disconnected and no message will ever be received here again.
     pub fn recv(&self) -> Result<T, RecvError> {
         lock_ignoring_poisoning(&self.0).recv()
     }
@@ -422,6 +427,8 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
+    /// # Errors
+    /// Will return `Err` if `capacity` is 0 or we have an OS level error while spawning threads..
     pub fn new(capacity: usize) -> Result<Self, InitError> {
         if capacity == 0 {
             return Err(InitError::InvalidCapacity);
@@ -436,19 +443,19 @@ impl ThreadPool {
                 loop {
                     match job_rx_thread.recv() {
                         Ok(job) => {
-                            if panic::catch_unwind(move || job()).is_err() {
-                                error!("Job in thread {} panicked", i)
+                            if panic::catch_unwind(job).is_err() {
+                                error!("Job in thread {} panicked", i);
                             }
-                        }
+                        },
                         Err(error) => {
                             error!(
                                 "job channel in thread_{} broke, exiting thread: {:?}",
                                 i, error
                             );
                             break;
-                        }
+                        },
                     }
-                }
+                };
             });
 
             match spawned {

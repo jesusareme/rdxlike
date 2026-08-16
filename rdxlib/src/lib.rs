@@ -43,6 +43,7 @@ pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
     pub messages_tx: MessageSender<Message<C::Action, C::RuntimeAction>>,
 }
 
+#[allow(clippy::struct_field_names)]
 pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
     services: <C::ServiceCommand as EnvironmentCommand>::Environment,
     state: C::State,
@@ -134,7 +135,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
         messages_tx: &MessageSender<Message<C::Action, C::RuntimeAction>>,
         pending: &mut VecDeque<Message<C::Action, C::RuntimeAction>>,
     ) {
-        use Cmd::*;
+        use Cmd::{Direct, Queue, Async, Env};
         match cmd {
             Direct(new_work_actions) => {
                 pending.extend(new_work_actions.into_iter().map(Into::into));

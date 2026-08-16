@@ -17,7 +17,7 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
         action: Action,
         mut next: Next<MoniLibClient>,
     ) -> MoniProducts {
-        use MoniMiddleware::*;
+        use MoniMiddleware::{Logger, Clock};
         match self {
             Logger { prev, post } => {
                 if *prev {
@@ -75,7 +75,7 @@ mod tests {
     }
 
     fn fake_reducer(_: &mut State, action: Action) -> MoniProducts {
-        assert!(matches!(action, NoOp));
+        assert!(matches!(action, Action::Init));
         next_products()
     }
 

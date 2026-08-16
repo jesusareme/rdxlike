@@ -55,7 +55,7 @@ impl Debug for TimerBehavior {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TimerBehavior")
             .field("timer_type", &self.timer_type)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -88,7 +88,7 @@ impl Timer {
         match self.behavior.timer_type {
             TimerType::Repeat(_) => self.state.count = 0,
             TimerType::Debounce => self.state.count += 1,
-        };
+        }
         let next_duration = (self.behavior.get_next_duration)(self.state.count);
         self.state.deadline = now + next_duration;
     }
@@ -147,7 +147,7 @@ impl Timers {
                 let now = clock_clone.now_instant();
                 let actions = Self::advance(&mut tasks, message, now);
                 for action in actions {
-                    if !action_tx.send_message(action).is_ok() {
+                    if action_tx.send_message(action).is_err() {
                         debug!("Sender dropped, nothing more to do here...");
                         break 'thread_loop;
                     }

@@ -29,6 +29,7 @@ pub enum MoniDomainError {
 }
 
 impl MoniError {
+    #[must_use]
     pub fn new(error_type: MoniErrorType) -> Self {
         MoniError {
             id: Uuid::new_v4(),

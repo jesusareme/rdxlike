@@ -6,6 +6,7 @@ use std::{
     ops::Deref,
     sync::{Arc, RwLock},
 };
+use std::sync::PoisonError;
 use uuid::Uuid;
 
 pub trait ClockSource {
@@ -74,7 +75,7 @@ impl DropCancellation {
 pub struct CancellationCheck(Arc<RwLock<bool>>, Uuid);
 impl CancellationCheck {
     pub fn is_cancelled(&self) -> bool {
-        *self.0.read().unwrap_or_else(|e| e.into_inner())
+        *self.0.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn still_working(&self) -> Option<()> {
@@ -84,8 +85,8 @@ impl CancellationCheck {
 
 impl Drop for DropCancellation {
     fn drop(&mut self) {
-        let mut guard = self.0.write().unwrap_or_else(|e| e.into_inner());
-        *guard = true
+        let mut guard = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        *guard = true;
     }
 }
 

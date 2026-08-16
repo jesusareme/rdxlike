@@ -17,6 +17,7 @@ impl<C: Client> RuntimeProducts<C> {
 		}
 	}
 
+	#[must_use]
 	pub fn none() -> Self {
 		RuntimeProducts {
 			subscriber: None,
@@ -31,6 +32,7 @@ pub struct ActionProducts<C: Client> {
 }
 
 impl<C: Client> ActionProducts<C> {
+	#[must_use]
 	pub fn none() -> Self {
 		ActionProducts {
 			cmds: vec![],
@@ -38,6 +40,7 @@ impl<C: Client> ActionProducts<C> {
 		}
 	}
 
+	#[must_use]
 	pub fn cmd(cmd: impl Into<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds: vec![cmd.into()],
@@ -45,6 +48,7 @@ impl<C: Client> ActionProducts<C> {
 		}
 	}
 
+	#[must_use]
 	pub fn cmds(cmds: Vec<Cmd<C>>) -> Self {
 		ActionProducts {
 			cmds,
@@ -52,11 +56,13 @@ impl<C: Client> ActionProducts<C> {
 		}
 	}
 
+	#[must_use]
 	pub fn with_cmd(mut self, cmd: impl Into<Cmd<C>>) -> Self {
 		self.cmds.push(cmd.into());
 		self
 	}
 
+	#[must_use]
 	pub fn with_dirty(mut self, flags: impl Into<EnumSet<C::Flag>>) -> Self {
 		self.flags |= flags.into();
 		self

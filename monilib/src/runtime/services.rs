@@ -53,7 +53,7 @@ pub enum PersistenceError {
 
 impl Display for PersistenceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Persistence error with cause: {:?}", self)
+        write!(f, "Persistence error with cause: {self:?}")
     }
 }
 
@@ -151,12 +151,11 @@ impl PersistenceServiceApi {
 
 impl PersistenceApi for PersistenceServiceApi {
     fn open_or_create_state(&self) -> io::Result<String> {
-        let content = match fs::read_to_string(&self.base_path) {
-            Ok(content) => content,
-            Err(_) => {
-                File::create(&self.base_path)?;
-                String::new()
-            }
+        let content = if let Ok(c) = fs::read_to_string(&self.base_path) {
+            c
+        } else {
+            File::create(&self.base_path)?;
+            String::new()
         };
         Ok(content)
     }
@@ -210,7 +209,7 @@ fn save_state(model: ModelState, api: &dyn PersistenceApi) -> Action {
     };
     drop(model);
     match api.save(&content) {
-        Ok(_) => WorkingAction::SuccessfulSave.into(),
+        Ok(()) => WorkingAction::SuccessfulSave.into(),
         Err(error) => Action::InitResult(Err(PersistenceError::from(error))),
     }
 }

@@ -1,6 +1,6 @@
 use monilib::LibErrorCause::Path;
 use monilib::MoniErrorType::Lib;
-use monilib::{LibClockSource, LibConfig, LibErrorCause, MoniErrorType, MoniLib, MoniLogLevel};
+use monilib::{LibClockSource, LibConfig, LibErrorCause, MoniLib, MoniLogLevel};
 use std::assert_matches;
 use std::fs;
 use std::path::PathBuf;

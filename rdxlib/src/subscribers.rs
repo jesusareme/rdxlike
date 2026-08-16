@@ -13,7 +13,9 @@ use uuid::Uuid;
 pub trait Subscriber {
 	type State;
 	type Flag: enumset::EnumSetType;
-	
+
+	/// # Errors
+	/// Will return `Err` if Subscriber could not be notified of a relevant change.
 	fn notify(&mut self, new_state: &Self::State) -> Result<(), SubscriberError>;
 	fn is_active(&self) -> bool;
 	fn interested_in(&self, offered: &EnumSet<Self::Flag>) -> bool;
@@ -61,6 +63,8 @@ pub trait ViewTransformer<C: Client>: Send + 'static {
 	/// Extracts the minimum thread-safe slice from the original state needed to calculate the
 	/// final information the view needs. It returns `SubscriberError` if was unable to create the
 	/// state slice.
+	/// # Errors
+	/// Will return `Err` if it could not get a meaningful slice of state from which derive a view product.
 	fn slice(state: &C::State, token: ViewId) -> Result<Self::Slice, SubscriberError>;
 
 	/// Derives the final data needed by the view. This method is executed on its own
@@ -84,6 +88,8 @@ pub struct OutputSubscriber<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT
 }
 
 impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubscriber<C, VT, VO> {
+	/// # Errors
+	/// Will return `Err` if an OS level error was produced while spawning a worker thread.
 	pub fn new(id: ViewId, mut transformer: VT, output: VO) -> Result<Self, InitError> {
 		let (sender, receiver) = one_slot_channel::<VT::Slice>();
 		let builder = thread::Builder::new().name(id.to_string());
@@ -98,7 +104,7 @@ impl<C: Client, VT: ViewTransformer<C>, VO: ViewOutput<VT::Product>> OutputSubsc
 					break;
 				}
 			}
-			debug!("dropping thread for output subscriber: {}", id)
+			debug!("dropping thread for output subscriber: {}", id);
 		})?;
 
 		Ok(OutputSubscriber {

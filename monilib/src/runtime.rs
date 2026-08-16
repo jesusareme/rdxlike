@@ -8,10 +8,9 @@ mod subscribers;
 use crate::util::{ClockSource, DropCancellation, ExpenseId};
 use crate::{
     MoniDomainError, MoniError,
-    action::{Action::Init, *},
+    action::{Action, LibAction, ModelAction, RunningAction, WorkingAction},
     util::VersionedArc,
 };
-use LibAction::{ErrorsSubscription, PlainListViewSubscription};
 use enumset::{EnumSet, EnumSetType};
 use jiff::{Timestamp, Zoned};
 use rdxlib::cmd::Cmd;
@@ -22,11 +21,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use crate::action::LibAction::StatisticsSubscription;
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
-pub use services::PersistenceError;
 use rdxlib::error::InitError;
+pub use services::PersistenceError;
 use tracing::{debug, error};
 
 use crate::runtime::cmd::ServiceCommand;
@@ -39,6 +37,8 @@ use rdxlib::subscribers::ViewId;
 use rdxlib::util::{MessageSend, MessageSender};
 use rdxlib::{Client, Runtime, RuntimeConfig};
 
+use crate::action::Action::Init;
+use crate::action::LibSubscription;
 #[cfg(test)]
 use crate::testing::ref_id;
 use boltffi::data;
@@ -46,6 +46,7 @@ use rdxlib::middleware::ChainableMiddleware;
 #[cfg(test)]
 use std::cmp::Ordering;
 use uuid::Uuid;
+use crate::action::LibSubscription::{Errors, PlainListView, StatisticsSub};
 
 pub(crate) struct MoniLibClient;
 impl Client for MoniLibClient {
@@ -83,12 +84,13 @@ pub struct RuntimeEnvironment {
 pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniError> {
     let environment = Services::new(&config.actions_tx, config.path, &config.clock)?;
 
-    let mut funs = vec![];
-    funs.push(MoniMiddleware::Logger {
-        prev: config.logging_enabled_pre_action,
-        post: config.logging_enabled_post_action
-    });
-    funs.push(MoniMiddleware::Clock(config.clock));
+    let funs = vec![
+        MoniMiddleware::Logger {
+            prev: config.logging_enabled_pre_action,
+            post: config.logging_enabled_post_action,
+        },
+        MoniMiddleware::Clock(config.clock),
+    ];
 
     let state = State::default();
 
@@ -112,20 +114,24 @@ pub fn new(config: RuntimeEnvironment) -> Result<Runtime<MoniLibClient>, MoniErr
 
 fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
     match lib_message {
-        PlainListViewSubscription(token, out) => {
-            match subscribers::plain_list_view_subscriber(token, out) {
-                Ok(new_subscription) => RuntimeProducts {
-                    subscriber: Some(Box::new(new_subscription)),
-                    actions: vec![RunningAction::ListViewPrepare(token).into()],
-                },
-                Err(cause) => unstarted_subscriber("plain list view", cause),
-            }
-        }
-        ErrorsSubscription(out) => match subscribers::errors_subscriber(out) {
+        LibAction::Subscription(subscription) => subscription_reducer(subscription),
+    }
+}
+
+fn subscription_reducer(subscription: LibSubscription) -> RuntimeProducts<MoniLibClient> {
+    match subscription {
+        PlainListView(token, out) => match subscribers::plain_list_view_subscriber(token, out) {
+            Ok(new_subscription) => RuntimeProducts {
+                subscriber: Some(Box::new(new_subscription)),
+                actions: vec![RunningAction::ListViewPrepare(token).into()],
+            },
+            Err(cause) => unstarted_subscriber("plain list view", cause),
+        },
+        Errors(out) => match subscribers::errors_subscriber(out) {
             Ok(new_subscription) => RuntimeProducts::subscriber(new_subscription),
             Err(cause) => unstarted_subscriber("errors", cause),
         },
-        StatisticsSubscription(out) => match statistics_subscriber(out) {
+        StatisticsSub(out) => match statistics_subscriber(out) {
             Ok(new_subscription) => RuntimeProducts::subscriber(new_subscription),
             Err(cause) => unstarted_subscriber("statistics", cause),
         },
@@ -133,7 +139,8 @@ fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
 }
 
 fn unstarted_subscriber(name: &str, cause: InitError) -> RuntimeProducts<MoniLibClient> {
-    let message = format!("Unable to start the {name} subscriber, subscription is dropped: {cause}");
+    let message =
+        format!("Unable to start the {name} subscriber, subscription is dropped: {cause}");
     error!(message);
     RuntimeProducts {
         subscriber: None,
@@ -179,7 +186,7 @@ impl Default for ModelState {
             model_version: MODEL_VERSION,
             movements: VersionedArc::from(vec![]),
             statistics_all: None,
-            ids: Ids::default()
+            ids: Ids::default(),
         }
     }
 }

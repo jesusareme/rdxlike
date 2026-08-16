@@ -1,10 +1,12 @@
-use super::{cmd::*, *};
+use super::{cmd::{PersistenceCmd, DelayedSaveProduct, AsyncCmd, TimeSubscriptionCmd}, debug, State, MoniProducts, ModelState, AppState, EnumSet, MoniError, RunningState, RunningAction, Dirty, PlainListViewState, Zoned, ModelAction, Expense, MoniDomainError, Uuid};
 use crate::LibErrorCause;
 use crate::action::WorkingAction::{Model, Save, SuccessfulSave};
+use crate::inout::ExpenseAddIntent;
 use crate::runtime::Dirty::Statistics;
+use crate::runtime::Statistics as StatisticsData;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::model_views::ClockedModelStateView;
-use crate::util::{DropCancellation, IdSource};
+use crate::util::{DropCancellation, ExpenseId, IdSource};
 use crate::{action::Action, runtime::cmd::DebounceAction::Cancel};
 use rdxlib::cmd::Cmd::Direct;
 use std::fmt::Debug;
@@ -12,7 +14,7 @@ use std::mem;
 use tracing::error;
 
 pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
-    use Action::*;
+    use Action::{Init, InitResult, Running, Working};
     match action {
         Init => MoniProducts::cmd(PersistenceCmd::CreateOrOpenFile),
 
@@ -58,34 +60,9 @@ pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
                     }
 
                     Model(action) => reducer_model(
-                        ClockedModelStateView::new(model, &mut state.running),
+                        &mut ClockedModelStateView::new(model, &mut state.running),
                         action,
                     ),
-                    // Action::AddToInfo(text) => Products::none(),
-                    // Action::AddFromLongCalculation => {
-                    // 	let counter = state.counter.clone(); // we can move values for later use
-                    // 	let cmd = Cmd::BasicService(BasicServiceCmd::DoLongCalculation { counter });
-                    // 	Products::cmd(cmd).with_dirty(Dirty::AllViews)
-                    // }
-                    // Action::AddEverySecond(interval) => {
-                    // 	let operation = DropCancellation::new(Uuid::new_v4());
-                    // 	let handle = operation.cancellation_handle();
-                    // 	state.counting = Some(operation);
-                    //
-                    // 	let cmd = Cmd::Subscription(Subscription::Time(TimeSubscriptionCmd::EveryXSeconds {
-                    // 		interval,
-                    // 		handle,
-                    // 	}));
-                    // 	Products::cmd(cmd)
-                    // }
-                    // Action::AddFromAsync => {
-                    // 	let counter = state.counter;
-                    // 	let cmd = Cmd::Async(Box::new(move || {
-                    // 		thread::sleep(Duration::from_secs(1));
-                    // 		Action::Add(counter * 2)
-                    // 	}));
-                    // 	Products::cmd(cmd)
-                    // }
                 }
             }
         },
@@ -100,7 +77,7 @@ fn failed_init(state: &mut State, cause: impl Debug) -> MoniProducts {
         error!(
             "These pending actions received while initializing store will be discarded: {:?}",
             actions
-        )
+        );
     }
 
     MoniProducts::none()
@@ -137,167 +114,17 @@ fn finances_dirty(date: &Zoned, first_of_month: &Zoned) -> Dirty {
     }
 }
 
-fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProducts {
+fn reducer_model(state: &mut ClockedModelStateView, action: ModelAction) -> MoniProducts {
     match action {
-        ModelAction::Add(expense_intent) => {
-            let first_of_month = state
-                .time
-                .first_of_month()
-                .expect("first_of_month from an injected Zoned cannot fail");
+        ModelAction::Add(expense_intent) => add_expense(state, expense_intent),
 
-            let date = expense_intent.date.unwrap_or_else(|| state.time.clone());
+        ModelAction::Update(updated_expense) => update_expense(state, updated_expense),
 
-            let dirty = finances_dirty(&date, &first_of_month);
+        ModelAction::Delete(id) => delete_expense(state, id),
 
-            let idx = state
-                .model_state
-                .movements
-                .partition_point(|e| e.date <= date);
+        ModelAction::StatisticsAll => request_statistics(state),
 
-            let id = state.model_state.ids.next_expense_id.get_and_inc();
-            let expense = Expense::new(
-                id,
-                date,
-                expense_intent.amount,
-                expense_intent.comment,
-                expense_intent.category,
-            );
-
-            state.model_state.movements.update_with(|expenses| {
-                expenses.insert(idx, expense);
-            });
-
-            MoniProducts::none().with_dirty(dirty).with_delayed_save()
-        }
-
-        ModelAction::Update(updated_expense) => {
-            match state
-                .model_state
-                .movements
-                .iter()
-                .position(|current| current.id == updated_expense.id)
-            {
-                None => {
-                    state
-                        .errors
-                        .push(MoniDomainError::ExpenseNotFound(updated_expense.id.into()).into());
-                    MoniProducts::none()
-                }
-                Some(idx) => {
-                    let previous = state
-                        .model_state
-                        .movements
-                        .get(idx)
-                        .expect("element should exist");
-
-                    if *previous == updated_expense {
-                        return MoniProducts::none();
-                    }
-
-                    let first_of_month = state
-                        .time
-                        .first_of_month()
-                        .expect("first_of_month from an injected Zoned cannot fail");
-                    let updated_dirty = finances_dirty(&updated_expense.date, &first_of_month);
-
-                    state.model_state.movements.update_with(|expenses| {
-                        let previous = expenses.get_mut(idx).expect("element should exist");
-                        let previous_dirty = finances_dirty(&previous.date, &first_of_month);
-
-                        if previous.date == updated_expense.date {
-                            // We set in-place, order is not changing
-                            *previous = updated_expense;
-                        } else {
-                            // Remove and guarantee order
-                            _ = expenses.remove(idx);
-                            let updated_idx =
-                                expenses.partition_point(|e| e.date <= updated_expense.date);
-                            expenses.insert(updated_idx, updated_expense);
-                        }
-
-                        MoniProducts::none()
-                            .with_dirty(previous_dirty | updated_dirty)
-                            .with_delayed_save()
-                    })
-                }
-            }
-        }
-
-        ModelAction::Delete(id) => {
-            match state
-                .model_state
-                .movements
-                .iter()
-                .position(|current| current.id == id)
-            {
-                None => {
-                    state
-                        .errors
-                        .push(MoniDomainError::ExpenseNotFound(id.into()).into());
-                    MoniProducts::none()
-                }
-                Some(idx) => {
-                    let first_of_month = state
-                        .time
-                        .first_of_month()
-                        .expect("first_of_month should fail here");
-
-                    let removed = state
-                        .model_state
-                        .movements
-                        .update_with(|expenses| expenses.remove(idx));
-
-                    let dirty = finances_dirty(&removed.date, &first_of_month);
-
-                    MoniProducts::none().with_dirty(dirty).with_delayed_save()
-                }
-            }
-        }
-
-        ModelAction::StatisticsAll => match &mut state.model_state.statistics_all {
-            Some(s)
-                if s.at_movements_version == state.model_state.movements.version()
-                    && state.tasks.statistics_running.is_none() =>
-            {
-                s.requested_at = state.time.timestamp();
-                MoniProducts::none().with_dirty(Statistics)
-            }
-
-            _ => {
-                if state.tasks.statistics_running.is_some() {
-                    // Only one statistics calculation running at any time (just to simplify example)
-                    debug!("Statistics request was ignored as there was a previous one running");
-                    return MoniProducts::none()
-                }
-
-                let cancellation_token = DropCancellation::new(Uuid::new_v4());
-                let cancellation_check = cancellation_token.cancellation_check();
-
-                state.tasks.statistics_running = Some(cancellation_token);
-
-                MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
-                    state.model_state.movements.clone(),
-                    state.time.timestamp(),
-                    cancellation_check,
-                ))
-            }
-        },
-
-        ModelAction::StatisticsAllResult(statistics) => {
-            let Some(statistics) = statistics else {
-                debug!("Statistics calculation was cancelled");
-                return MoniProducts::none();
-            };
-
-            if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at)
-            {
-                debug!("Statistics calculation was discarded as we have a more up to date version already calculated");
-                return MoniProducts::none();
-            }
-            state.model_state.statistics_all = Some(statistics);
-
-            MoniProducts::none().with_dirty(Statistics)
-        }
+        ModelAction::StatisticsAllResult(statistics) => receive_statistics(state, statistics),
 
         ModelAction::CancelStatistics => {
             state.tasks.statistics_running = None;
@@ -321,10 +148,172 @@ fn reducer_model(state: ClockedModelStateView, action: ModelAction) -> MoniProdu
     }
 }
 
+fn add_expense(state: &mut ClockedModelStateView, expense_intent: ExpenseAddIntent) -> MoniProducts {
+    let first_of_month = state
+        .time
+        .first_of_month()
+        .expect("first_of_month from an injected Zoned cannot fail");
+
+    let date = expense_intent.date.unwrap_or_else(|| state.time.clone());
+
+    let dirty = finances_dirty(&date, &first_of_month);
+
+    let idx = state
+        .model_state
+        .movements
+        .partition_point(|e| e.date <= date);
+
+    let id = state.model_state.ids.next_expense_id.get_and_inc();
+    let expense = Expense::new(
+        id,
+        date,
+        expense_intent.amount,
+        expense_intent.comment,
+        expense_intent.category,
+    );
+
+    state.model_state.movements.update_with(|expenses| {
+        expenses.insert(idx, expense);
+    });
+
+    MoniProducts::none().with_dirty(dirty).with_delayed_save()
+}
+
+fn update_expense(state: &mut ClockedModelStateView, updated_expense: Expense) -> MoniProducts {
+    let Some(idx) = state
+        .model_state
+        .movements
+        .iter()
+        .position(|current| current.id == updated_expense.id)
+    else {
+        state
+            .errors
+            .push(MoniDomainError::ExpenseNotFound(updated_expense.id.into()).into());
+        return MoniProducts::none();
+    };
+
+    let previous = state
+        .model_state
+        .movements
+        .get(idx)
+        .expect("element should exist");
+
+    if *previous == updated_expense {
+        return MoniProducts::none();
+    }
+
+    let first_of_month = state
+        .time
+        .first_of_month()
+        .expect("first_of_month from an injected Zoned cannot fail");
+    let updated_dirty = finances_dirty(&updated_expense.date, &first_of_month);
+
+    state.model_state.movements.update_with(|expenses| {
+        let previous = expenses.get_mut(idx).expect("element should exist");
+        let previous_dirty = finances_dirty(&previous.date, &first_of_month);
+
+        if previous.date == updated_expense.date {
+            // We set in-place, order is not changing
+            *previous = updated_expense;
+        } else {
+            // Remove and guarantee order
+            _ = expenses.remove(idx);
+            let updated_idx = expenses.partition_point(|e| e.date <= updated_expense.date);
+            expenses.insert(updated_idx, updated_expense);
+        }
+
+        MoniProducts::none()
+            .with_dirty(previous_dirty | updated_dirty)
+            .with_delayed_save()
+    })
+}
+
+fn delete_expense(state: &mut ClockedModelStateView, id: ExpenseId) -> MoniProducts {
+    let Some(idx) = state
+        .model_state
+        .movements
+        .iter()
+        .position(|current| current.id == id)
+    else {
+        state
+            .errors
+            .push(MoniDomainError::ExpenseNotFound(id.into()).into());
+        return MoniProducts::none();
+    };
+
+    let first_of_month = state
+        .time
+        .first_of_month()
+        .expect("first_of_month should fail here");
+
+    let removed = state
+        .model_state
+        .movements
+        .update_with(|expenses| expenses.remove(idx));
+
+    let dirty = finances_dirty(&removed.date, &first_of_month);
+
+    MoniProducts::none().with_dirty(dirty).with_delayed_save()
+}
+
+fn request_statistics(state: &mut ClockedModelStateView) -> MoniProducts {
+    match &mut state.model_state.statistics_all {
+        Some(s)
+            if s.at_movements_version == state.model_state.movements.version()
+                && state.tasks.statistics_running.is_none() =>
+        {
+            s.requested_at = state.time.timestamp();
+            MoniProducts::none().with_dirty(Statistics)
+        }
+
+        _ => {
+            if state.tasks.statistics_running.is_some() {
+                // Only one statistics calculation running at any time (just to simplify example)
+                debug!("StatisticsSub request was ignored as there was a previous one running");
+                return MoniProducts::none();
+            }
+
+            let cancellation_token = DropCancellation::new(Uuid::new_v4());
+            let cancellation_check = cancellation_token.cancellation_check();
+
+            state.tasks.statistics_running = Some(cancellation_token);
+
+            MoniProducts::cmd(AsyncCmd::StatisticsCalculation(
+                state.model_state.movements.clone(),
+                state.time.timestamp(),
+                cancellation_check,
+            ))
+        }
+    }
+}
+
+fn receive_statistics(
+    state: &mut ClockedModelStateView,
+    statistics: Option<StatisticsData>,
+) -> MoniProducts {
+    let Some(statistics) = statistics else {
+        debug!("StatisticsSub calculation was cancelled");
+        return MoniProducts::none();
+    };
+
+    if matches!(state.model_state.statistics_all, Some(s) if s.requested_at >= statistics.requested_at)
+    {
+        debug!(
+            "StatisticsSub calculation was discarded as we have a more up to date version already calculated"
+        );
+        return MoniProducts::none();
+    }
+    state.model_state.statistics_all = Some(statistics);
+
+    MoniProducts::none().with_dirty(Statistics)
+}
+
 #[cfg(test)]
 mod reducer_model_test {
     use super::*;
     use crate::MoniErrorType;
+    use crate::runtime::{ExpenseCategory, Ids, LongLivingTasks};
+    use crate::util::VersionedArc;
     use crate::inout::ExpenseAddIntent;
     use crate::runtime::ExpenseCategory::*;
     use crate::runtime::cmd::DebounceAction::Bump;
@@ -342,6 +331,7 @@ mod reducer_model_test {
     use rstest::rstest;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
+    use crate::util::ExpenseId;
 
     fn expense_in_ref_month() -> Expense {
         let past = contemporary_ref_date().first_of_month().unwrap();
@@ -421,7 +411,7 @@ mod reducer_model_test {
         action: ModelAction,
     ) -> MoniProducts {
         reducer_model(
-            ClockedModelStateView {
+            &mut ClockedModelStateView {
                 model_state: state,
                 time,
                 errors,

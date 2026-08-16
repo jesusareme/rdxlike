@@ -67,7 +67,7 @@ impl AsyncCmd {
                 fn calculate_statistics(
                     expenses: VersionedArc<Vec<Expense>>,
                     request_time: Timestamp,
-                    cancellation_check: CancellationCheck,
+                    cancellation_check: &CancellationCheck,
                 ) -> Option<Statistics> {
                     let version = expenses.version();
                     let len = expenses.len();
@@ -100,7 +100,7 @@ impl AsyncCmd {
                 }
 
                 Box::new(move || {
-                    StatisticsAllResult(calculate_statistics(expenses, request_time, cancellation_check))
+                    StatisticsAllResult(calculate_statistics(expenses, request_time, &cancellation_check))
                     .into()
                 })
             }

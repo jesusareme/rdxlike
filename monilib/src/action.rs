@@ -8,9 +8,13 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub(crate) enum LibAction {
-    PlainListViewSubscription(ViewId, LibOutput<MoniExpensePlainListSnapshot>),
-    ErrorsSubscription(LibOutput<Vec<MoniError>>),
-    StatisticsSubscription(LibOutput<MoniStatistics>),
+    Subscription(LibSubscription),
+}
+
+pub(crate) enum LibSubscription {
+    PlainListView(ViewId, LibOutput<MoniExpensePlainListSnapshot>),
+    Errors(LibOutput<Vec<MoniError>>),
+    StatisticsSub(LibOutput<MoniStatistics>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,6 +88,18 @@ impl From<RunningAction> for Action {
 impl From<LibAction> for MoniMessage {
     fn from(value: LibAction) -> Self {
         Message::Runtime(value)
+    }
+}
+
+impl From<LibSubscription> for LibAction {
+    fn from(s: LibSubscription) -> Self {
+        LibAction::Subscription(s)
+    }
+}
+
+impl From<LibSubscription> for MoniMessage {
+    fn from(s: LibSubscription) -> Self {
+        LibAction::from(s).into()
     }
 }
 

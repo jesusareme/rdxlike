@@ -163,6 +163,7 @@ impl MoniExpense {
 }
 
 impl MoniExpense {
+    #[allow(clippy::inconsistent_digit_grouping)]
     pub const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
 
     fn validated_amount(amount: i64) -> Result<i64, MoniValidationError> {
