@@ -135,7 +135,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
         messages_tx: &MessageSender<Message<C::Action, C::RuntimeAction>>,
         pending: &mut VecDeque<Message<C::Action, C::RuntimeAction>>,
     ) {
-        use Cmd::{Direct, Queue, Async, Env};
+        use Cmd::{Async, Direct, Env, Queue};
         match cmd {
             Direct(new_work_actions) => {
                 pending.extend(new_work_actions.into_iter().map(Into::into));
@@ -215,7 +215,6 @@ mod tests {
         CreateSubscriber(WitnessSubscriber),
         CreateActions(Vec<TestAction>),
     }
-
 
     impl Into<Message<TestAction, TestRuntimeAction>> for TestRuntimeAction {
         fn into(self) -> Message<TestAction, TestRuntimeAction> {
@@ -312,9 +311,9 @@ mod tests {
     }
     use crate::cmd::AsyncTask;
     use crate::messages::Message::Action;
+    use crate::primitives::BoxedThreadPoolJob;
     use crate::tests::TestAction::{BasicAction, CmdGeneratingAction, FlagAction};
     use WitnessSubscriberChecks::{Active, Interested, Notify};
-    use crate::primitives::BoxedThreadPoolJob;
 
     impl Default for WitnessSubscriber {
         fn default() -> Self {
@@ -333,7 +332,10 @@ mod tests {
         type Flag = TestFlag;
 
         fn notify(&mut self, new_state: &Self::State) -> Result<(), SubscriberError> {
-            self.operations.write().unwrap().push(Notify(new_state.clone()));
+            self.operations
+                .write()
+                .unwrap()
+                .push(Notify(new_state.clone()));
             if self.should_notify_error {
                 Err(SubscriberError::MissingState)
             } else {
@@ -365,7 +367,10 @@ mod tests {
         (MessageSender::new(sender), receiver)
     }
 
-    fn witness_reducer(state: &mut Vec<TestAction>, action: TestAction) -> ActionProducts<TestClient> {
+    fn witness_reducer(
+        state: &mut Vec<TestAction>,
+        action: TestAction,
+    ) -> ActionProducts<TestClient> {
         state.push(action);
         ActionProducts::none()
     }
@@ -425,7 +430,9 @@ mod tests {
         RuntimeProducts::none()
     }
 
-    fn products_producing_runtime_reducer(action: TestRuntimeAction) -> RuntimeProducts<TestClient> {
+    fn products_producing_runtime_reducer(
+        action: TestRuntimeAction,
+    ) -> RuntimeProducts<TestClient> {
         match action {
             TestRuntimeAction::CreateSubscriber(subscriber) => RuntimeProducts {
                 subscriber: Some(Box::new(subscriber)),
@@ -435,7 +442,7 @@ mod tests {
             TestRuntimeAction::CreateActions(actions) => RuntimeProducts {
                 subscriber: None,
                 actions,
-            }
+            },
         }
     }
 
@@ -691,26 +698,40 @@ mod tests {
 
     #[rstest]
     fn runtime_action_subscriber_product_should_add_subscriber_subscriber_is_called(
-        #[with(witness_reducer, products_producing_runtime_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
+        #[with(witness_reducer, products_producing_runtime_reducer)] config: RuntimeConfig<
+            TestClient,
+            WitnessJobDispatcher,
+        >,
     ) {
         let subscriber = WitnessSubscriber::default();
         let witness_op = subscriber.operations.clone();
 
         let mut runtime = Runtime::new(config);
-        runtime.process_message(Message::Runtime(TestRuntimeAction::CreateSubscriber(subscriber)));
+        runtime.process_message(Message::Runtime(TestRuntimeAction::CreateSubscriber(
+            subscriber,
+        )));
 
         assert_eq!(runtime.subscribers.len(), 1);
-        assert_eq!(*witness_op.read().unwrap(), vec![Active, Interested(EnumSet::all()), Notify(vec![])]);
+        assert_eq!(
+            *witness_op.read().unwrap(),
+            vec![Active, Interested(EnumSet::all()), Notify(vec![])]
+        );
     }
 
     #[rstest]
     fn runtime_action_action_product_should_add_action_and_execute_it_immediately(
-        #[with(cmd_producing_reducer, products_producing_runtime_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
+        #[with(cmd_producing_reducer, products_producing_runtime_reducer)] config: RuntimeConfig<
+            TestClient,
+            WitnessJobDispatcher,
+        >,
     ) {
         let mut runtime = Runtime::new(config);
-        let indirect_action = CmdGeneratingAction("indirect", CmdProduct::Direct(vec![BasicAction("3")]));
+        let indirect_action =
+            CmdGeneratingAction("indirect", CmdProduct::Direct(vec![BasicAction("3")]));
         let resulting_actions = vec![BasicAction("1"), BasicAction("2"), indirect_action];
-        runtime.process_message(Message::Runtime(TestRuntimeAction::CreateActions(resulting_actions.clone())));
+        runtime.process_message(Message::Runtime(TestRuntimeAction::CreateActions(
+            resulting_actions.clone(),
+        )));
 
         let mut executed_actions = resulting_actions;
         executed_actions.push(BasicAction("3"));

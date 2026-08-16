@@ -8,6 +8,7 @@ pub mod error;
 #[cfg(test)]
 mod testing;
 
+use crate::action::LibSubscription;
 pub use crate::error::{LibErrorCause, MoniDomainError, MoniError, MoniErrorType};
 use crate::inout::MoniStatistics;
 pub use crate::inout::{
@@ -17,8 +18,8 @@ pub use crate::inout::{
 pub use crate::runtime::ExpenseCategory;
 use crate::runtime::{MoniMessage, RuntimeEnvironment};
 use crate::util::ExpenseId;
-use action::{Action, LibAction, RunningAction, ModelAction, WorkingAction};
-use boltffi::{data, export, ffi_stream, EventSubscription};
+use action::{Action, LibAction, ModelAction, RunningAction, WorkingAction};
+use boltffi::{EventSubscription, data, export, ffi_stream};
 use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
@@ -33,7 +34,6 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, SystemClockSource};
 use uuid::Uuid;
-use crate::action::LibSubscription;
 
 #[data]
 #[derive(Clone, Debug)]
@@ -84,9 +84,11 @@ impl PlainListViewHandler {
     pub fn subscribe(&self) -> Arc<EventSubscription<MoniExpensePlainListSnapshot>> {
         let out = LibOutput::new(256);
 
-        if self.action_sender
+        if self
+            .action_sender
             .send_message(LibSubscription::PlainListView(self.token, out.clone()))
-            .is_err() {
+            .is_err()
+        {
             error!("Unable to subscribe, communication broken with library.");
         }
 
@@ -204,9 +206,11 @@ impl MoniLib {
     pub fn errors(&self) -> Arc<EventSubscription<Vec<MoniError>>> {
         let out = LibOutput::new(8);
 
-        if self.action_sender
+        if self
+            .action_sender
             .send_message(LibSubscription::Errors(out.clone()))
-            .is_err() {
+            .is_err()
+        {
             error!("Unable to subscribe, communication broken with library.");
         }
 
@@ -217,17 +221,20 @@ impl MoniLib {
     pub fn statistics(&self) -> Arc<EventSubscription<MoniStatistics>> {
         let out = LibOutput::new(8);
 
-        if self.action_sender
+        if self
+            .action_sender
             .send_message(LibSubscription::StatisticsSub(out.clone()))
-            .is_err() {
+            .is_err()
+        {
             error!("Unable to subscribe, communication broken with library.");
         }
 
         out.into()
     }
-    
+
     pub fn cancel_statistics(&self) -> Result<(), MoniError> {
-        self.action_sender.send_message(ModelAction::CancelStatistics)?;
+        self.action_sender
+            .send_message(ModelAction::CancelStatistics)?;
         Ok(())
     }
 
