@@ -1,12 +1,28 @@
+//! Concurrency building blocks the runtime is built on.
+//!
+//! These have been building exercises to familiarize myself with the inner working details of
+//! low level constructs such as those here present: thread pools, one slot channels,
+//! and multiple consumers channels
+//!
+//! Poisoning errors have been ignored through these constructs as logic executed while
+//! holding a lock should never panic save for a std library bug. There are two exceptions to this,
+//! [`OneSlotReceiver::recv()`] and [`OneSlotReceiver::try_recv()`], which can panic if the contained
+//! value drop panics on `take()` call. We would lose latest value on that call but OneSlot
+//! invariants are not affected.
+
 use crate::error::InitError;
-use std::sync::{Condvar, MutexGuard, PoisonError};
+use std::panic::UnwindSafe;
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
-use std::{panic, sync::{
-    Arc, Mutex,
-    mpsc::{Sender, channel},
-}, thread};
-use std::panic::UnwindSafe;
+use std::sync::{Condvar, MutexGuard, PoisonError};
+use std::{
+    panic,
+    sync::{
+        Arc, Mutex,
+        mpsc::{Sender, channel},
+    },
+    thread,
+};
 use tracing::{debug, error, warn};
 
 #[derive(PartialEq)]
@@ -47,6 +63,8 @@ impl<T> OneSlotCore<T> {
     }
 }
 
+/// Sending end of a [`one_slot_channel`].
+/// `OneSlotSender` implements `Clone` so can have multiple producers.
 pub struct OneSlotSender<T> {
     core: Arc<OneSlotCore<T>>,
 }
@@ -62,6 +80,8 @@ impl<T> Clone for OneSlotSender<T> {
 }
 
 impl<T: Send> OneSlotSender<T> {
+    /// Stores a value, overwriting whatever was waiting there unread. Never blocks.
+    ///
     /// # Errors
     /// Will return `Err` if all receiving end objects are dropped.
     pub fn send(&self, new_value: T) -> Result<(), SendError<T>> {
@@ -86,6 +106,8 @@ impl<T> Drop for OneSlotSender<T> {
     }
 }
 
+/// Receiving end of a [`one_slot_channel`], also usable as an [`Iterator`].
+/// `OneSlotReceiver` implements `Clone` so we can have multiple consumers.
 pub struct OneSlotReceiver<T> {
     core: Arc<OneSlotCore<T>>,
 }
@@ -108,6 +130,10 @@ impl<T> Drop for OneSlotReceiver<T> {
 }
 
 impl<T> OneSlotReceiver<T> {
+    /// Blocks until a value is available and returns it.
+    ///
+    /// # Errors
+    /// Will return `Err` if no sender left and no value available.
     pub fn recv(&self) -> Result<T, RecvError> {
         loop {
             let guard = self.core.get_guard();
@@ -126,7 +152,11 @@ impl<T> OneSlotReceiver<T> {
         }
     }
 
-    // todo! review for multiple receivers and doc
+    /// Takes the stored value if there is one, without blocking.
+    ///
+    /// # Errors
+    /// Will return `TryRecvError::Empty` if no value is available, or
+    /// `TryRecvError::Disconnected` if no sender left and no value available.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut guard = self.core.get_guard();
         guard.latest.take().map_or_else(
@@ -150,6 +180,12 @@ impl<T> Iterator for OneSlotReceiver<T> {
     }
 }
 
+/// Creates a channel that remembers only the most recent value sent. Each send value can be received
+/// by only one of the many potentially available receivers.
+///
+/// Meant for state updates where only the newest value is worth checking. For instance,
+/// generating products from latest state on a potentially lagging thread, where only latest
+/// state at every moment makes sense to be processed.
 #[must_use]
 pub fn one_slot_channel<T: Send>() -> (OneSlotSender<T>, OneSlotReceiver<T>) {
     let core = OneSlotCore {
@@ -171,8 +207,8 @@ mod tests_one_slot_channel {
     use crate::primitives::tests_one_slot_channel::TimedOutTestState::{Finished, Ready};
     use std::sync::mpsc::{RecvError, TryRecvError};
     use std::sync::{Arc, Condvar, Mutex};
-    use std::time::Duration;
     use std::thread;
+    use std::time::Duration;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -390,15 +426,21 @@ mod tests_one_slot_channel {
     }
 }
 
+/// Creates a multiple producers / multiple consumers channel.
+///
+/// Each value goes to exactly one of the receivers.
 #[must_use]
 pub fn shared_channel<T: Send>() -> (Sender<T>, SharedReceiver<T>) {
     let (sender, receiver) = channel();
     (sender, SharedReceiver(Arc::new(Mutex::new(receiver))))
 }
 
+/// A cloneable receiver whose clones all pull from the same queue.
 pub struct SharedReceiver<T: Send>(Arc<Mutex<Receiver<T>>>);
 
 impl<T: Send> SharedReceiver<T> {
+    /// Blocks until this receiver gets a value, or the channel disconnects.
+    ///
     /// # Errors
     /// Will return `Err` if sender is disconnected and no message will ever be received here again.
     pub fn recv(&self) -> Result<T, RecvError> {
@@ -422,18 +464,31 @@ impl<T: Send> Clone for SharedReceiver<T> {
     }
 }
 
+/// Represents a construct able to process jobs off the calling thread.
 pub trait JobsDispatcher {
+    /// Takes ownership of a job and schedules it to run.
+    ///
+    /// Must not block the caller under any circumstance.
     fn work_on(&self, job: BoxedThreadPoolJob);
 }
 
+/// A fixed set of worker threads pulling jobs from one shared queue.
+///
+/// Basic implementation of `JobsDispatcher`.
+///
+/// Workers catch panics so a failing job takes down neither its thread nor the pool.
+/// Dropping the pool closes the queue and blocks until the workers have drained the jobs
+/// still queued.
 pub struct ThreadPool {
     sender: Option<Sender<BoxedThreadPoolJob>>,
     handles: Vec<thread::JoinHandle<()>>,
 }
 
 impl ThreadPool {
+    /// Starts a pool of `capacity` worker threads.
+    ///
     /// # Errors
-    /// Will return `Err` if `capacity` is 0 or we have an OS level error while spawning threads..
+    /// Will return `Err` if `capacity` is 0, or we have an OS level error while spawning threads.
     pub fn new(capacity: usize) -> Result<Self, InitError> {
         if capacity == 0 {
             return Err(InitError::InvalidCapacity);
@@ -451,16 +506,16 @@ impl ThreadPool {
                             if panic::catch_unwind(job).is_err() {
                                 error!("Job in thread {} panicked", i);
                             }
-                        },
+                        }
                         Err(error) => {
                             error!(
                                 "job channel in thread_{} broke, exiting thread: {:?}",
                                 i, error
                             );
                             break;
-                        },
+                        }
                     }
-                };
+                }
             });
 
             match spawned {
@@ -480,10 +535,7 @@ impl ThreadPool {
     }
 }
 
-fn drop_workers(
-    sender: Option<Sender<BoxedThreadPoolJob>>,
-    handles: Vec<thread::JoinHandle<()>>,
-) {
+fn drop_workers(sender: Option<Sender<BoxedThreadPoolJob>>, handles: Vec<thread::JoinHandle<()>>) {
     drop(sender);
 
     for (i, handle) in handles.into_iter().enumerate() {

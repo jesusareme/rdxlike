@@ -24,18 +24,21 @@ use util::MessageSender;
 
 pub trait Client {
     type State;
-    type Action: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
-    type RuntimeAction: Send + 'static + Into<Message<Self::Action, Self::RuntimeAction>>;
+    type Action: Send + 'static + Into<ClientMessage<Self>>;
+    type RuntimeAction: Send + 'static + Into<ClientMessage<Self>>;
     type Flag: enumset::EnumSetType;
-    type ServiceCommand: EnvironmentCommand<Action = Self::Action, RuntimeAction = Self::RuntimeAction>;
+    type Environment;
+    type ServiceCommand: EnvironmentCommand<Client = Self>;
 }
+
+pub type ClientMessage<C> = Message<<C as Client>::Action, <C as Client>::RuntimeAction>;
 
 pub type Reducer<C> = fn(&mut <C as Client>::State, <C as Client>::Action) -> ActionProducts<C>;
 
 pub type RuntimeReducer<C> = fn(<C as Client>::RuntimeAction) -> RuntimeProducts<C>;
 
 pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
-    pub services: <C::ServiceCommand as EnvironmentCommand>::Environment,
+    pub services: C::Environment,
     pub state: C::State,
     pub middlewares: Vec<Box<dyn ChainableMiddleware<C>>>,
     pub reducer: Reducer<C>,
@@ -43,11 +46,9 @@ pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
     pub jobs_dispatcher: JD,
 }
 
-type ClientMessage<C> = Message<<C as Client>::Action, <C as Client>::RuntimeAction>;
-
 #[allow(clippy::struct_field_names)]
 pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
-    services: <C::ServiceCommand as EnvironmentCommand>::Environment,
+    services: C::Environment,
     state: C::State,
     middlewares: MiddlewareStore<C>,
     subscribers: Vec<Box<dyn Subscriber<Flag = C::Flag, State = C::State>>>,
@@ -161,7 +162,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
 
     fn process_command(
         cmd: Cmd<C>,
-        services: &mut <C::ServiceCommand as EnvironmentCommand>::Environment,
+        services: &mut C::Environment,
         jobs_dispatcher: &JD,
         messages_tx: &MessageSender<ClientMessage<C>>,
         pending: &mut VecDeque<ClientMessage<C>>,
@@ -217,6 +218,7 @@ mod tests {
         type Action = TestAction;
         type RuntimeAction = TestRuntimeAction;
         type Flag = TestFlag;
+        type Environment = Rc<Cell<u32>>;
         type ServiceCommand = TestServiceCommand;
     }
 
@@ -268,13 +270,11 @@ mod tests {
         IncrementAnd(Vec<TestAction>, Vec<TestAction>),
     }
     impl EnvironmentCommand for TestServiceCommand {
-        type Environment = Rc<Cell<u32>>;
-        type Action = TestAction;
-        type RuntimeAction = TestRuntimeAction;
+        type Client = TestClient;
 
         fn process(
             self,
-            env: &mut Self::Environment,
+            env: &mut Rc<Cell<u32>>,
             pending: &mut VecDeque<Message<TestAction, TestRuntimeAction>>,
             messages_tx: &MessageSender<Message<TestAction, TestRuntimeAction>>,
         ) {

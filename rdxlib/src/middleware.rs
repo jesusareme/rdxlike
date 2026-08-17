@@ -1,6 +1,22 @@
+//! The chain of interceptors an action crosses before reaching the reducer.
+//!
+//! Each middleware sees the action on the way down and the products on the way up, so it
+//! can log, replace the action, add side effects, or stop the chain entirely.
+
 use crate::{ActionProducts, Client, Reducer};
 
+/// One link in the middleware chain.
+///
+/// Calling [`Next::run`] passes control to the rest of the chain and finally to the
+/// reducer; not calling it short-circuits, and the reducer never sees the action.
+///
+/// TODO: examples of what belongs in a middleware versus in a reducer.
 pub trait ChainableMiddleware<C: Client> {
+    /// Handles the action, deciding whether and with what to continue down the chain.
+    ///
+    /// Runs on the runtime thread with exclusive access to the state.
+    ///
+    /// TODO: note whether mutating state here is acceptable or discouraged.
     fn execute(
         &mut self,
         state: &mut C::State,
@@ -9,6 +25,9 @@ pub trait ChainableMiddleware<C: Client> {
     ) -> ActionProducts<C>;
 }
 
+/// The registered middlewares plus the reducer that closes the chain.
+///
+/// TODO: state that registration order is execution order.
 pub struct MiddlewareStore<C: Client> {
     funs: Vec<Box<dyn ChainableMiddleware<C>>>,
     reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
@@ -21,17 +40,17 @@ impl<C: Client> MiddlewareStore<C> {
     }
 }
 
+/// A middleware's handle on the rest of the chain.
 pub struct Next<'n, C: Client> {
-    remaining:  &'n mut [Box<dyn ChainableMiddleware<C>>],
+    remaining: &'n mut [Box<dyn ChainableMiddleware<C>>],
     reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
 }
 
 impl<C: Client> Next<'_, C> {
-    pub fn run(
-        &mut self,
-        state: &mut C::State,
-        action: C::Action,
-    ) -> ActionProducts<C> {
+    /// Runs the next middleware, or the reducer when none is left, and returns its products.
+    ///
+    /// The action may be swapped for a different one here.
+    pub fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
         match self.remaining.split_first_mut() {
             None => (self.reducer)(state, action),
             Some((current, rest)) => current.execute(
@@ -47,6 +66,7 @@ impl<C: Client> Next<'_, C> {
 }
 
 impl<C: Client> MiddlewareStore<C> {
+    /// Sends an action through the whole chain and returns the products that come back up.
     pub fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
         Next {
             remaining: &mut self.funs,
@@ -55,6 +75,7 @@ impl<C: Client> MiddlewareStore<C> {
         .run(state, action)
     }
 
+    /// Builds the chain from middlewares in execution order, closed by `reducer`.
     pub fn new(funs: Vec<Box<dyn ChainableMiddleware<C>>>, reducer: Reducer<C>) -> Self {
         MiddlewareStore { funs, reducer }
     }
@@ -63,16 +84,16 @@ impl<C: Client> MiddlewareStore<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Client;
     use crate::cmd::EnvironmentCommand;
     use crate::messages::Message;
     use crate::products::ActionProducts;
     use crate::util::MessageSender;
-    use crate::Client;
+    use Log::{Entered, Exited};
     use enumset::EnumSetType;
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
-    use Log::{Entered, Exited};
 
     struct TestClient;
     impl Client for TestClient {
@@ -80,6 +101,7 @@ mod tests {
         type Action = TestAction;
         type RuntimeAction = TestRuntime;
         type Flag = TestFlag;
+        type Environment = ();
         type ServiceCommand = EmptyService;
     }
 
@@ -109,9 +131,7 @@ mod tests {
     #[derive(Debug, PartialEq, Clone)]
     struct EmptyService;
     impl EnvironmentCommand for EmptyService {
-        type Environment = ();
-        type Action = TestAction;
-        type RuntimeAction = TestRuntime;
+        type Client = TestClient;
         fn process(
             self,
             _: &mut (),
@@ -121,12 +141,18 @@ mod tests {
         }
     }
 
-    fn witness_reducer(state: &mut Vec<TestAction>, action: TestAction) -> ActionProducts<TestClient> {
+    fn witness_reducer(
+        state: &mut Vec<TestAction>,
+        action: TestAction,
+    ) -> ActionProducts<TestClient> {
         state.push(action);
         ActionProducts::none()
     }
 
-    fn flag_b_reducer(state: &mut Vec<TestAction>, action: TestAction) -> ActionProducts<TestClient> {
+    fn flag_b_reducer(
+        state: &mut Vec<TestAction>,
+        action: TestAction,
+    ) -> ActionProducts<TestClient> {
         state.push(action);
         ActionProducts::none().with_dirty(TestFlag::B)
     }
@@ -223,8 +249,14 @@ mod tests {
         let logger = Logger::default();
         let mut store = MiddlewareStore::new(
             vec![
-                boxed(TestMiddleware { name: "first", logger: logger.clone() }),
-                boxed(TestMiddleware { name: "second", logger: logger.clone() }),
+                boxed(TestMiddleware {
+                    name: "first",
+                    logger: logger.clone(),
+                }),
+                boxed(TestMiddleware {
+                    name: "second",
+                    logger: logger.clone(),
+                }),
             ],
             witness_reducer,
         );
@@ -234,7 +266,12 @@ mod tests {
 
         assert_eq!(
             *logger.borrow(),
-            vec![Entered("first"), Entered("second"), Exited("second"), Exited("first")]
+            vec![
+                Entered("first"),
+                Entered("second"),
+                Exited("second"),
+                Exited("first")
+            ]
         );
         assert_eq!(state, vec![TestAction("ping")]);
     }
@@ -242,7 +279,10 @@ mod tests {
     #[test]
     fn products_from_reducer_should_rise_up_through_middlewares() {
         let mut store = MiddlewareStore::new(
-            vec![boxed(TestMiddleware { name: "only", logger: Logger::default() })],
+            vec![boxed(TestMiddleware {
+                name: "only",
+                logger: Logger::default(),
+            })],
             flag_b_reducer,
         );
         let mut state = vec![];
@@ -257,8 +297,14 @@ mod tests {
         let logger = Logger::default();
         let mut store = MiddlewareStore::new(
             vec![
-                boxed(ShortCircuitingMiddleware { name: "stop", logger: logger.clone() }),
-                boxed(TestMiddleware { name: "never", logger: logger.clone() }),
+                boxed(ShortCircuitingMiddleware {
+                    name: "stop",
+                    logger: logger.clone(),
+                }),
+                boxed(TestMiddleware {
+                    name: "never",
+                    logger: logger.clone(),
+                }),
             ],
             witness_reducer,
         );
@@ -274,7 +320,9 @@ mod tests {
     #[test]
     fn middleware_replacing_action_should_propagate_reaching_reducer() {
         let mut store = MiddlewareStore::new(
-            vec![boxed(ActionReplacingMiddleware { new_action: TestAction("replacement") })],
+            vec![boxed(ActionReplacingMiddleware {
+                new_action: TestAction("replacement"),
+            })],
             witness_reducer,
         );
         let mut state = vec![];
@@ -286,8 +334,10 @@ mod tests {
 
     #[test]
     fn middleware_updating_products_updated_products_should_return_from_next() {
-        let mut store =
-            MiddlewareStore::new(vec![boxed(ProductUpdatingMiddleware { flag: TestFlag::A })], flag_b_reducer);
+        let mut store = MiddlewareStore::new(
+            vec![boxed(ProductUpdatingMiddleware { flag: TestFlag::A })],
+            flag_b_reducer,
+        );
         let mut state = vec![];
 
         let products = store.run(&mut state, TestAction("basic"));

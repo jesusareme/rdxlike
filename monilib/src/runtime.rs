@@ -47,12 +47,13 @@ use rdxlib::middleware::ChainableMiddleware;
 use std::cmp::Ordering;
 use uuid::Uuid;
 
-pub(crate) struct MoniLibClient;
+pub(crate) enum MoniLibClient {}
 impl Client for MoniLibClient {
     type State = State;
     type Action = Action;
     type RuntimeAction = LibAction;
     type Flag = Dirty;
+    type Environment = Services;
     type ServiceCommand = ServiceCommand;
 }
 

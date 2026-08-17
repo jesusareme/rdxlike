@@ -1,11 +1,11 @@
 use crate::action::ModelAction::StatisticsAllResult;
-use crate::action::{Action, LibAction, RunningAction, WorkingAction};
+use crate::action::{Action, RunningAction, WorkingAction};
 use crate::runtime::cmd::AsyncCmd::StatisticsCalculation;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::cmd::Subscription::{Debounce, Time};
 use crate::runtime::services::{Service, Services};
 use crate::runtime::{Expense, ModelState, MoniProducts, Statistics, StatisticsResults};
-use crate::runtime::{MoniCommand, MoniMessage};
+use crate::runtime::{MoniCommand, MoniLibClient, MoniMessage};
 use crate::util::{CancellationCheck, VersionedArc};
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
@@ -22,13 +22,11 @@ pub(crate) enum ServiceCommand {
 }
 
 impl EnvironmentCommand for ServiceCommand {
-    type Environment = Services;
-    type Action = Action;
-    type RuntimeAction = LibAction;
+    type Client = MoniLibClient;
 
     fn process(
         self,
-        env: &mut Self::Environment,
+        env: &mut Services,
         pending: &mut VecDeque<MoniMessage>,
         _messages_tx: &MessageSender<MoniMessage>,
     ) {

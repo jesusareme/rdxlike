@@ -1,9 +1,15 @@
+//! Small helpers shared across the crate.
+
 use std::sync::mpsc::Sender;
 use crate::Client;
 use crate::error::InitError;
 use crate::messages::{Message, Operation};
 use crate::messages::Operation::{Run, Stop};
 
+/// The ability to put a message on the runtime queue.
+///
+/// A trait rather than a concrete type so anything holding one - commands, async jobs,
+/// services - can be tested against a double.
 pub trait MessageSend: Clone + Send + 'static {
     type Message: Send + 'static;
 
@@ -45,6 +51,9 @@ impl<C: Client> Drop for RuntimeHandle<C> {
     }
 }
 
+/// The [`MessageSend`] implementation backed by a standard channel sender.
+///
+/// Cloneable regardless of `M`, which the derived `Clone` would not give us.
 pub struct MessageSender<M> {
     tx: Sender<Operation<M>>,
 }
