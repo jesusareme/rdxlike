@@ -23,7 +23,7 @@ use boltffi::{EventSubscription, data, export, ffi_stream};
 use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
-use rdxlib::util::{MessageSend, MessageSender, CancellationHandle};
+use rdxlib::util::{MessageSend, MessageSender, RuntimeHandle};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::{
@@ -97,7 +97,7 @@ impl PlainListViewHandler {
 }
 
 pub struct MoniLib {
-    _cancellation_handle: CancellationHandle<MoniLibClient>,
+    runtime_handle: RuntimeHandle<MoniLibClient>,
     action_sender: MessageSender<MoniMessage>,
     clock: Arc<dyn ClockSource + Send + Sync>,
     lib_thread_handle: JoinHandle<()>,
@@ -124,7 +124,7 @@ impl MoniLib {
         };
         let shared_clock = clock.clone();
 
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<(CancellationHandle<MoniLibClient>, MessageSender<MoniMessage>), MoniError>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<RuntimeHandle<MoniLibClient>, MoniError>>();
 
         let builder = Builder::new().name("messages".to_string());
         let lib_thread_handle = builder.spawn(move || {
@@ -135,26 +135,29 @@ impl MoniLib {
                 clock: shared_clock,
             };
             match runtime::new(env) {
-                Ok((runtime_init, sender)) => {
-                    if ready_tx.send(Ok((runtime_init.handle, sender))).is_err() {
+                Ok(runtime_init) => {
+                    if ready_tx.send(Ok(runtime_init.handle)).is_err() {
                         error!("Error while trying to response back after successful runtime init");
                         return;
                     }
                     runtime_init.runtime.run();
+                    info!("MoniLib run loop ended");
                 }
                 Err(error) => {
                     _ = ready_tx.send(Err(error));
                 }
             }
-            info!("MoniLib run loop ended");
+            info!("MoniLib thread ended");
         })?;
 
-        let (_cancellation_handle, action_sender) = ready_rx
+        let runtime_handle = ready_rx
             .recv()
             .map_err(|_| MoniError::from(LibErrorCause::Threading))??;
 
+        let action_sender = runtime_handle.create_sender();
+
         Ok(MoniLib {
-            _cancellation_handle,
+            runtime_handle,
             action_sender,
             clock,
             lib_thread_handle,
@@ -261,5 +264,10 @@ impl MoniLib {
     #[must_use]
     pub fn has_finished(&self) -> bool {
         self.lib_thread_handle.is_finished()
+    }
+
+    pub fn stop(&self) -> Result<(), MoniError> {
+        self.runtime_handle.cancel()?;
+        Ok(())
     }
 }

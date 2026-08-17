@@ -8,14 +8,15 @@ pub mod subscribers;
 pub mod util;
 
 use crate::cmd::{Cmd, EnvironmentCommand};
-use crate::messages::Message;
+use crate::messages::{Message, Operation};
 use crate::middleware::{ChainableMiddleware, MiddlewareStore};
 use crate::primitives::{JobsDispatcher, ThreadPool};
 use crate::products::{ActionProducts, RuntimeProducts};
-use crate::util::{MessageSend, CancellationHandle};
+use crate::util::{MessageSend, RuntimeHandle};
+use Operation::Run;
 use enumset::EnumSet;
 use std::collections::VecDeque;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use subscribers::Subscriber;
 use tracing::{error, info, warn};
@@ -42,40 +43,39 @@ pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
     pub jobs_dispatcher: JD,
 }
 
+type ClientMessage<C> = Message<<C as Client>::Action, <C as Client>::RuntimeAction>;
+
 #[allow(clippy::struct_field_names)]
 pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
     services: <C::ServiceCommand as EnvironmentCommand>::Environment,
     state: C::State,
     middlewares: MiddlewareStore<C>,
     subscribers: Vec<Box<dyn Subscriber<Flag = C::Flag, State = C::State>>>,
-    messages_rx: Receiver<Message<C::Action, C::RuntimeAction>>,
-    messages_tx: MessageSender<Message<C::Action, C::RuntimeAction>>,
+    messages_rx: Receiver<Operation<ClientMessage<C>>>,
+    messages_tx: MessageSender<ClientMessage<C>>,
     runtime_reducer: RuntimeReducer<C>,
     jobs_dispatcher: JD,
 }
 
-pub struct RuntimeBuilder<C: Client> {
-    sender: Arc<Sender<Message<C::Action, C::RuntimeAction>>>,
-    receiver: Receiver<Message<C::Action, C::RuntimeAction>>,
-}
-
 pub struct RuntimeInit<C: Client, JD: JobsDispatcher = ThreadPool> {
     pub runtime: Runtime<C, JD>,
-    pub handle: CancellationHandle<C>,
+    pub handle: RuntimeHandle<C>,
+}
+
+pub struct RuntimeBuilder<C: Client> {
+    sender: Sender<Operation<ClientMessage<C>>>,
+    receiver: Receiver<Operation<ClientMessage<C>>>,
+}
+impl<C: Client> Default for RuntimeBuilder<C> {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::channel::<Operation<ClientMessage<C>>>();
+        RuntimeBuilder { sender, receiver }
+    }
 }
 
 impl<C: Client> RuntimeBuilder<C> {
-    pub fn new() -> Self {
-        let (sender, receiver) = mpsc::channel::<Message<C::Action, C::RuntimeAction>>();
-
-        RuntimeBuilder {
-            sender: Arc::new(sender),
-            receiver,
-        }
-    }
-
-    pub fn create_sender(&self) -> MessageSender<Message<C::Action, C::RuntimeAction>> {
-        MessageSender::new(&self.sender)
+    pub fn create_sender(&self) -> MessageSender<ClientMessage<C>> {
+        MessageSender::from_sender(self.sender.clone())
     }
 
     pub fn create_runtime<JD: JobsDispatcher>(
@@ -83,7 +83,7 @@ impl<C: Client> RuntimeBuilder<C> {
         config: RuntimeConfig<C, JD>,
     ) -> RuntimeInit<C, JD> {
         let sender = self.create_sender();
-        let handle = CancellationHandle::new(self.sender);
+        let handle = RuntimeHandle::from_sender(self.sender);
         let runtime = Runtime {
             services: config.services,
             state: config.state,
@@ -95,10 +95,7 @@ impl<C: Client> RuntimeBuilder<C> {
             jobs_dispatcher: config.jobs_dispatcher,
         };
 
-        RuntimeInit {
-            runtime,
-            handle,
-        }
+        RuntimeInit { runtime, handle }
     }
 }
 
@@ -106,15 +103,15 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
     pub fn run(mut self) {
         info!("Started run loop for RdxLib...");
 
-        while let Ok(message) = self.messages_rx.recv() {
+        while let Ok(Run(message)) = self.messages_rx.recv() {
             self.process_message(message);
         }
 
         info!("Finished run loop for RdxLib...");
     }
 
-    fn process_message(&mut self, message: Message<C::Action, C::RuntimeAction>) {
-        let mut pending: VecDeque<Message<C::Action, C::RuntimeAction>> = VecDeque::new();
+    fn process_message(&mut self, message: ClientMessage<C>) {
+        let mut pending: VecDeque<ClientMessage<C>> = VecDeque::new();
         pending.push_back(message);
         let mut dirty = EnumSet::empty();
 
@@ -166,8 +163,8 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
         cmd: Cmd<C>,
         services: &mut <C::ServiceCommand as EnvironmentCommand>::Environment,
         jobs_dispatcher: &JD,
-        messages_tx: &MessageSender<Message<C::Action, C::RuntimeAction>>,
-        pending: &mut VecDeque<Message<C::Action, C::RuntimeAction>>,
+        messages_tx: &MessageSender<ClientMessage<C>>,
+        pending: &mut VecDeque<ClientMessage<C>>,
     ) {
         use Cmd::{Async, Direct, Env, Queue};
         match cmd {
@@ -497,8 +494,8 @@ mod tests {
 
     fn started_runtime(
         config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
-    ) -> (TestRuntime, CancellationHandle<TestClient>) {
-        let RuntimeInit { runtime, handle } = RuntimeBuilder::new().create_runtime(config);
+    ) -> (TestRuntime, RuntimeHandle<TestClient>) {
+        let RuntimeInit { runtime, handle } = RuntimeBuilder::default().create_runtime(config);
         (runtime, handle)
     }
 
@@ -568,14 +565,14 @@ mod tests {
                 .messages_rx
                 .try_recv()
                 .expect("Should not fail, next message available"),
-            Action(BasicAction("basic1"))
+            Run(Action(BasicAction("basic1")))
         );
         assert_matches!(
             runtime
                 .messages_rx
                 .try_recv()
                 .expect("Should not fail, next message available"),
-            Action(CmdGeneratingAction("second", _))
+            Run(Action(CmdGeneratingAction("second", _)))
         );
         assert_eq!(
             runtime
@@ -608,7 +605,7 @@ mod tests {
                 .messages_rx
                 .try_recv()
                 .expect("Should not fail, next message available"),
-            Action(BasicAction("async_result"))
+            Run(Action(BasicAction("async_result")))
         );
         assert_eq!(
             runtime
@@ -673,7 +670,7 @@ mod tests {
                 .messages_rx
                 .try_recv()
                 .expect("Should not fail, next message available"),
-            Action(BasicAction("queued"))
+            Run(Action(BasicAction("queued")))
         );
         assert_eq!(
             runtime
@@ -794,5 +791,51 @@ mod tests {
         runtime.process_message(Action(BasicAction("basic")));
 
         assert_eq!(*op_witness.read().unwrap(), expected_checks);
+    }
+
+    #[rstest]
+    fn cancelled_runtime_should_process_pending_messages_and_end_run_loop(
+        #[with(all_dirty_flags_reducer)] config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
+    ) {
+        let subscriber = WitnessSubscriber::default();
+        let op_witness = subscriber.operations.clone();
+        let (mut runtime, handle) = started_runtime(config);
+        runtime.subscribers.push(Box::new(subscriber));
+
+        let sender = handle.create_sender();
+        sender
+            .send_message(BasicAction("before_cancel"))
+            .expect("Send should not fail in tests");
+        handle.cancel().expect("Runtime should still be running");
+        sender
+            .send_message(BasicAction("after_cancel"))
+            .expect("Send should not fail in tests");
+
+        runtime.run();
+
+        let notified: Vec<_> = op_witness
+            .read()
+            .unwrap()
+            .iter()
+            .cloned()
+            .filter_map(|op| {
+                if let Notify(state) = op {
+                    Some(state)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(notified, vec![vec![BasicAction("before_cancel")]]);
+    }
+
+    #[rstest]
+    fn dropped_handle_should_end_run_loop(config: RuntimeConfig<TestClient, WitnessJobDispatcher>) {
+        let (runtime, handle) = started_runtime(config);
+
+        drop(handle);
+
+        runtime.run();
     }
 }

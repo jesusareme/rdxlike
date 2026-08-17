@@ -28,6 +28,17 @@ pub enum MoniDomainError {
     ExpenseNotFound(u64),
 }
 
+#[data]
+#[derive(Debug, Clone, PartialEq)]
+pub enum LibErrorCause {
+    Sender,
+    Path,
+    Threading,
+    StateLoad(String),
+}
+
+impl Error for MoniError {}
+
 impl MoniError {
     #[must_use]
     pub fn new(error_type: MoniErrorType) -> Self {
@@ -95,17 +106,6 @@ impl Display for MoniDomainError {
             MoniDomainError::ExpenseNotFound(id) => write!(f, "ExpenseNotFound: {id}"),
         }
     }
-}
-
-impl Error for MoniError {}
-
-#[data]
-#[derive(Debug, Clone, PartialEq)]
-pub enum LibErrorCause {
-    Sender,
-    Path,
-    Threading,
-    StateLoad(String),
 }
 
 impl From<InitError> for MoniError {

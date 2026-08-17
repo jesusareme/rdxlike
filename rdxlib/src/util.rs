@@ -1,9 +1,8 @@
-use std::sync::mpsc::SendError;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Weak};
 use crate::Client;
 use crate::error::InitError;
-use crate::messages::Message;
+use crate::messages::{Message, Operation};
+use crate::messages::Operation::{Run, Stop};
 
 pub trait MessageSend: Clone + Send + 'static {
     type Message: Send + 'static;
@@ -13,34 +12,47 @@ pub trait MessageSend: Clone + Send + 'static {
     fn send_message(
         &self,
         message: impl Into<Self::Message>,
-    ) -> Result<(), SendError<Self::Message>>;
+    ) -> Result<(), InitError>;
 }
 
 // TODO! docs
-pub struct CancellationHandle<C: Client> {
-    retained_runtime_sender: Option<Arc<Sender<Message<C::Action, C::RuntimeAction>>>>,
+pub struct RuntimeHandle<C: Client> {
+    sender: Sender<Operation<Message<C::Action, C::RuntimeAction>>>,
 }
 
-impl<C: Client> CancellationHandle<C>
+impl<C: Client> RuntimeHandle<C>
 {
-    pub fn cancel(&mut self) -> Result<(), InitError> {
-        self.retained_runtime_sender.take().map_or_else(|| Err(InitError::NoLongerRunning), |_| Ok(()))
+    pub fn create_sender(&self) -> MessageSender<Message<C::Action, C::RuntimeAction>> {
+        MessageSender {
+            tx: self.sender.clone(),
+        }
+    }
+    
+    pub fn cancel(&self) -> Result<(), InitError> {
+        self.sender.send(Stop).map_err(|_| InitError::NoLongerRunning)
     }
 
-    #[must_use]
-    pub(crate) fn new(tx: Arc<Sender<Message<C::Action, C::RuntimeAction>>>) -> Self {
-        CancellationHandle { retained_runtime_sender: Some(tx) }
+    pub(super) fn from_sender(sender: Sender<Operation<Message<C::Action, C::RuntimeAction>>>) -> Self {
+        RuntimeHandle {
+            sender,
+        }
+    }
+}
+
+impl<C: Client> Drop for RuntimeHandle<C> {
+    fn drop(&mut self) {
+        _ = self.sender.send(Stop);
     }
 }
 
 pub struct MessageSender<M> {
-    tx: Weak<Sender<M>>,
+    tx: Sender<Operation<M>>,
 }
 
 impl<M> MessageSender<M> {
-    pub(crate) fn new(sender: &Arc<Sender<M>>) -> Self {
+    pub(super) fn from_sender(sender: Sender<Operation<M>>) -> Self {
         MessageSender {
-            tx: Arc::downgrade(sender),
+            tx: sender,
         }
     }
 }
@@ -59,13 +71,8 @@ where
 {
     type Message = M;
 
-    fn send_message(&self, message: impl Into<M>) -> Result<(), SendError<M>> {
-        match self.tx.upgrade() {
-            None => Err(SendError(message.into())),
-            Some(s) => {
-                s.send(message.into())?;
-                Ok(())
-            }
-        }
+    fn send_message(&self, message: impl Into<M>) -> Result<(), InitError> {
+        self.tx.send(Run(message.into())).map_err(|_| InitError::NoLongerRunning)?;
+        Ok(())
     }
 }

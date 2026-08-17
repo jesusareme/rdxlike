@@ -33,7 +33,7 @@ use rdxlib::messages::Message;
 use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
-use rdxlib::util::{MessageSend, MessageSender};
+use rdxlib::util::MessageSend;
 use rdxlib::{Client, RuntimeBuilder, RuntimeConfig, RuntimeInit};
 
 use crate::action::Action::Init;
@@ -78,8 +78,8 @@ pub struct RuntimeEnvironment {
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-pub fn new(config: RuntimeEnvironment) -> Result<(RuntimeInit<MoniLibClient>, MessageSender<MoniMessage>), MoniError> {
-    let builder = RuntimeBuilder::new();
+pub fn new(config: RuntimeEnvironment) -> Result<RuntimeInit<MoniLibClient>, MoniError> {
+    let builder = RuntimeBuilder::default();
 
     let sender = builder.create_sender();
     let environment = Services::new(&sender, config.path, &config.clock)?;
@@ -107,7 +107,7 @@ pub fn new(config: RuntimeEnvironment) -> Result<(RuntimeInit<MoniLibClient>, Me
 
     debug!("MoniLib ready to run...");
 
-    Ok((builder.create_runtime(runtime_cfg), sender))
+    Ok(builder.create_runtime(runtime_cfg))
 }
 
 fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
