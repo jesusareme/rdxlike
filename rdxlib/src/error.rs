@@ -1,7 +1,6 @@
 //! Errors surfaced by the crate.
 //!
-//! TODO: note the intended handling for each one - which are fatal at startup and which a
-//! client can recover from.
+//! All of them expose non-recoverable errors that would prevent the Runtime from executing normally.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -9,49 +8,64 @@ use std::io;
 
 /// Something went wrong while setting up a component that owns threads.
 #[derive(Debug)]
-pub enum InitError {
+pub enum RuntimeError {
     /// The OS refused to spawn a thread.
     ThreadSpawn(io::Error),
 
     /// A capacity of zero was requested, which would leave nothing to do the work.
     InvalidCapacity,
+
+    /// Client requested an operation but Runtime is no longer running.
     NoLongerRunning,
 }
 
-impl Display for InitError {
+#[derive(Debug)]
+pub struct RuntimeFatalError(pub(super) RuntimeError);
+
+impl Display for RuntimeFatalError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("RuntimeFatalError").field(&self.0).finish()
+    }
+}
+
+impl Error for RuntimeFatalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+impl Display for RuntimeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            InitError::ThreadSpawn(source) => write!(f, "Unable to spawn thread: {source}"),
-            InitError::InvalidCapacity => write!(f, "Capacity needs to be greater than zero"),
-            InitError::NoLongerRunning => write!(f, "Runtime already cancelled"),
+            RuntimeError::ThreadSpawn(source) => write!(f, "Unable to spawn thread: {source}"),
+            RuntimeError::InvalidCapacity => write!(f, "Capacity needs to be greater than zero"),
+            RuntimeError::NoLongerRunning => write!(f, "Runtime already cancelled"),
         }
     }
 }
 
-impl Error for InitError {
+impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            InitError::ThreadSpawn(source) => Some(source),
-            InitError::InvalidCapacity | InitError::NoLongerRunning  => None,
+            RuntimeError::ThreadSpawn(source) => Some(source),
+            RuntimeError::InvalidCapacity | RuntimeError::NoLongerRunning => None,
         }
     }
 }
 
-impl From<io::Error> for InitError {
+impl From<io::Error> for RuntimeError {
     fn from(value: io::Error) -> Self {
-        InitError::ThreadSpawn(value)
+        RuntimeError::ThreadSpawn(value)
     }
 }
 
-/// A subscriber could not be told about a change it was interested in.
-///
-/// TODO: confirm the runtime's policy for these (currently logged, subscriber kept).
+/// Subscribers specific errors, rising up programming errors or receiving unexpected state.
 #[derive(Debug)]
 pub enum SubscriberError {
     /// The state a subscriber needs is not there, so no slice could be built.
     MissingState,
 
-    /// The slice could not be handed over, e.g. the worker thread is gone.
+    /// The slice could not be handed over, i.e. the worker thread is gone.
     UnableToNotifySubscriber(Box<dyn Error + 'static>),
 }
 

@@ -2,19 +2,19 @@
 //!
 //! These have been building exercises to familiarize myself with the inner working details of
 //! low level constructs such as those here present: thread pools, one slot channels,
-//! and multiple consumers channels
+//! and multiple consumers channels.
 //!
-//! Poisoning errors have been ignored through these constructs as logic executed while
+//! Poisoning errors have been ignored through these constructs, as logic executed while
 //! holding a lock should never panic save for a std library bug. There are two exceptions to this,
 //! [`OneSlotReceiver::recv()`] and [`OneSlotReceiver::try_recv()`], which can panic if the contained
 //! value drop panics on `take()` call. We would lose latest value on that call but OneSlot
-//! invariants are not affected.
+//! invariants are not compromised.
 
-use crate::error::InitError;
+use crate::error::RuntimeError;
 use std::panic::UnwindSafe;
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
-use std::sync::{Condvar, MutexGuard, PoisonError};
+use std::sync::{Condvar, MutexGuard, PoisonError, RwLock};
 use std::{
     panic,
     sync::{
@@ -25,42 +25,33 @@ use std::{
 };
 use tracing::{debug, error, warn};
 
-#[derive(PartialEq)]
-struct Slot<T> {
-    latest: Option<T>,
-    senders: usize,
-    receivers: usize,
-}
-
-impl<T> Default for Slot<T> {
-    fn default() -> Self {
-        Slot {
-            latest: None,
-            senders: 1,
-            receivers: 1,
-        }
-    }
-}
-
-impl<T> Slot<T> {
-    fn is_content_available(&self) -> bool {
-        self.latest.is_some() || self.senders == 0
-    }
-}
-
-struct OneSlotCore<T> {
-    mutex: Mutex<Slot<T>>,
-    cvar: Condvar,
-}
-
-fn lock_ignoring_poisoning<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock_ignoring_poisoning<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-impl<T> OneSlotCore<T> {
-    fn get_guard(&self) -> MutexGuard<'_, Slot<T>> {
-        lock_ignoring_poisoning(&self.mutex)
-    }
+// pub(crate) fn lock_ignoring_poisoning<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+//     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+// }
+
+/// Creates a channel that remembers only the most recent value sent. Each send value can be received
+/// by only one of the many potentially available receivers.
+///
+/// Meant for state updates where only the newest value is worth checking. For instance,
+/// generating products from latest state on a potentially lagging thread, where only latest
+/// state at every moment makes sense to be processed next.
+#[must_use]
+pub fn one_slot_channel<T: Send>() -> (OneSlotSender<T>, OneSlotReceiver<T>) {
+    let core = OneSlotCore {
+        mutex: Mutex::new(Slot::default()),
+        cvar: Condvar::new(),
+    };
+    let core = Arc::new(core);
+    (
+        OneSlotSender {
+            core: Arc::clone(&core),
+        },
+        OneSlotReceiver { core },
+    )
 }
 
 /// Sending end of a [`one_slot_channel`].
@@ -83,7 +74,7 @@ impl<T: Send> OneSlotSender<T> {
     /// Stores a value, overwriting whatever was waiting there unread. Never blocks.
     ///
     /// # Errors
-    /// Will return `Err` if all receiving end objects are dropped.
+    /// Will return [`SendError`] if all receiving end objects are dropped.
     pub fn send(&self, new_value: T) -> Result<(), SendError<T>> {
         let mut guard = self.core.get_guard();
         if guard.receivers == 0 {
@@ -133,7 +124,7 @@ impl<T> OneSlotReceiver<T> {
     /// Blocks until a value is available and returns it.
     ///
     /// # Errors
-    /// Will return `Err` if no sender left and no value available.
+    /// Will return [`RecvError`] if no sender left and no value available.
     pub fn recv(&self) -> Result<T, RecvError> {
         loop {
             let guard = self.core.get_guard();
@@ -144,10 +135,10 @@ impl<T> OneSlotReceiver<T> {
                 .unwrap_or_else(PoisonError::into_inner);
 
             if let Some(available) = guard.latest.take() {
-                return Ok(available)
+                return Ok(available);
             }
             if guard.senders == 0 {
-                return Err(RecvError)
+                return Err(RecvError);
             }
         }
     }
@@ -155,8 +146,8 @@ impl<T> OneSlotReceiver<T> {
     /// Takes the stored value if there is one, without blocking.
     ///
     /// # Errors
-    /// Will return `TryRecvError::Empty` if no value is available, or
-    /// `TryRecvError::Disconnected` if no sender left and no value available.
+    /// Will return [`TryRecvError::Empty`] if no value is available, or
+    /// [`TryRecvError::Disconnected`] if no sender left and no value available.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut guard = self.core.get_guard();
         guard.latest.take().map_or_else(
@@ -172,33 +163,46 @@ impl<T> OneSlotReceiver<T> {
     }
 }
 
+#[derive(PartialEq)]
+struct Slot<T> {
+    latest: Option<T>,
+    senders: usize,
+    receivers: usize,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Slot {
+            latest: None,
+            senders: 1,
+            receivers: 1,
+        }
+    }
+}
+
+impl<T> Slot<T> {
+    fn is_content_available(&self) -> bool {
+        self.latest.is_some() || self.senders == 0
+    }
+}
+
+struct OneSlotCore<T> {
+    mutex: Mutex<Slot<T>>,
+    cvar: Condvar,
+}
+
+impl<T> OneSlotCore<T> {
+    fn get_guard(&self) -> MutexGuard<'_, Slot<T>> {
+        lock_ignoring_poisoning(&self.mutex)
+    }
+}
+
 impl<T> Iterator for OneSlotReceiver<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.recv().ok()
     }
-}
-
-/// Creates a channel that remembers only the most recent value sent. Each send value can be received
-/// by only one of the many potentially available receivers.
-///
-/// Meant for state updates where only the newest value is worth checking. For instance,
-/// generating products from latest state on a potentially lagging thread, where only latest
-/// state at every moment makes sense to be processed.
-#[must_use]
-pub fn one_slot_channel<T: Send>() -> (OneSlotSender<T>, OneSlotReceiver<T>) {
-    let core = OneSlotCore {
-        mutex: Mutex::new(Slot::default()),
-        cvar: Condvar::new(),
-    };
-    let core = Arc::new(core);
-    (
-        OneSlotSender {
-            core: Arc::clone(&core),
-        },
-        OneSlotReceiver { core },
-    )
 }
 
 #[cfg(test)]
@@ -442,7 +446,7 @@ impl<T: Send> SharedReceiver<T> {
     /// Blocks until this receiver gets a value, or the channel disconnects.
     ///
     /// # Errors
-    /// Will return `Err` if sender is disconnected and no message will ever be received here again.
+    /// Will return [`RecvError`] if sender is disconnected and no message will ever be received here again.
     pub fn recv(&self) -> Result<T, RecvError> {
         lock_ignoring_poisoning(&self.0).recv()
     }
@@ -456,7 +460,7 @@ impl<T: Send> Iterator for SharedReceiver<T> {
     }
 }
 
-pub(crate) type BoxedThreadPoolJob = Box<dyn FnOnce() + Send + UnwindSafe>;
+pub type BoxedThreadPoolJob = Box<dyn FnOnce() + Send + UnwindSafe>;
 
 impl<T: Send> Clone for SharedReceiver<T> {
     fn clone(&self) -> Self {
@@ -468,7 +472,7 @@ impl<T: Send> Clone for SharedReceiver<T> {
 pub trait JobsDispatcher {
     /// Takes ownership of a job and schedules it to run.
     ///
-    /// Must not block the caller under any circumstance.
+    /// Must not block the caller.
     fn work_on(&self, job: BoxedThreadPoolJob);
 }
 
@@ -477,21 +481,18 @@ pub trait JobsDispatcher {
 /// Basic implementation of `JobsDispatcher`.
 ///
 /// Workers catch panics so a failing job takes down neither its thread nor the pool.
-/// Dropping the pool closes the queue and blocks until the workers have drained the jobs
-/// still queued.
 pub struct ThreadPool {
-    sender: Option<Sender<BoxedThreadPoolJob>>,
-    handles: Vec<thread::JoinHandle<()>>,
+    sender: Sender<BoxedThreadPoolJob>,
 }
 
 impl ThreadPool {
     /// Starts a pool of `capacity` worker threads.
     ///
     /// # Errors
-    /// Will return `Err` if `capacity` is 0, or we have an OS level error while spawning threads.
-    pub fn new(capacity: usize) -> Result<Self, InitError> {
+    /// Will return [`RuntimeError::InvalidCapacity`] if `capacity` is 0, or we have an OS level error while spawning threads.
+    pub fn new(capacity: usize) -> Result<Self, RuntimeError> {
         if capacity == 0 {
-            return Err(InitError::InvalidCapacity);
+            return Err(RuntimeError::InvalidCapacity);
         }
         let mut handles = Vec::with_capacity(capacity);
         let (tx, rx) = shared_channel::<BoxedThreadPoolJob>();
@@ -523,15 +524,12 @@ impl ThreadPool {
                 Err(error) => {
                     error!("Unable to spawn thread_{i}, shutting down partial pool: {error:?}");
                     drop_workers(Some(tx), handles);
-                    return Err(InitError::ThreadSpawn(error));
+                    return Err(RuntimeError::ThreadSpawn(error));
                 }
             }
         }
 
-        Ok(ThreadPool {
-            sender: Some(tx),
-            handles,
-        })
+        Ok(ThreadPool { sender: tx })
     }
 }
 
@@ -548,16 +546,8 @@ fn drop_workers(sender: Option<Sender<BoxedThreadPoolJob>>, handles: Vec<thread:
 
 impl JobsDispatcher for ThreadPool {
     fn work_on(&self, job: BoxedThreadPoolJob) {
-        if let Some(sender) = &self.sender
-            && let Err(error) = sender.send(job)
-        {
+        if let Err(error) = self.sender.send(job) {
             error!("actions channel tx for threadpool broke: {:?}", error);
         }
-    }
-}
-
-impl Drop for ThreadPool {
-    fn drop(&mut self) {
-        drop_workers(self.sender.take(), self.handles.drain(..).collect());
     }
 }

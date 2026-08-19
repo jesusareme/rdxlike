@@ -1,62 +1,82 @@
-//! The chain of interceptors an action crosses before reaching the reducer.
+//! The chain of interceptors an action passes through before reaching the reducer.
 //!
-//! Each middleware sees the action on the way down and the products on the way up, so it
-//! can log, replace the action, add side effects, or stop the chain entirely.
+//! Each middleware sees the incoming action and state, and the outcoming products, so it
+//! can log, replace the action, alter state and add side effects, or stop or bypass the
+//! chain entirely.
 
 use crate::{ActionProducts, Client, Reducer};
 
-/// One link in the middleware chain.
+/// Middlewares are required to implement the `ChainableMiddleware` trait.
 ///
 /// Calling [`Next::run`] passes control to the rest of the chain and finally to the
 /// reducer; not calling it short-circuits, and the reducer never sees the action.
 ///
-/// TODO: examples of what belongs in a middleware versus in a reducer.
+/// Middlewares should be seen as an additional layer of control and observation over the Runtime
+/// for specific, mostly temporary use cases, and *never as a primary way of mutating client state*.
+/// That's why currently Middlewares are fixed at configuration time and cannot be,
+/// unlike `Subscribers`, added or removed.
+///
+/// Middlewares specifically allow for debugging operations and control that would otherwise be
+/// impossible to achieve under the severe constraints a Redu/Elm-inspired system imposes, such as
+/// simulating error conditions.
 pub trait ChainableMiddleware<C: Client> {
-    /// Handles the action, deciding whether and with what to continue down the chain.
+    /// Common identity operation is passing received `action` to `next` and then returning whatever
+    /// it produces without interferece. But complete access to actions, `state` and generated products
+    /// is available.
     ///
-    /// Runs on the runtime thread with exclusive access to the state.
-    ///
-    /// TODO: note whether mutating state here is acceptable or discouraged.
+    /// All middlewares run on the same main Runtime thread as [`Reducer`], therefore same recommendations
+    /// apply: middleware should not block the thread or execute costly operations, unless forcing those
+    /// situations is exactly what your middleware is designed for :)
     fn execute(
         &mut self,
         state: &mut C::State,
         action: C::Action,
-        next: Next<C>,
+        next: &mut dyn Next<C>,
     ) -> ActionProducts<C>;
 }
 
-/// The registered middlewares plus the reducer that closes the chain.
+/// A middleware's handle on the rest of the chain.
 ///
-/// TODO: state that registration order is execution order.
-pub struct MiddlewareStore<C: Client> {
-    funs: Vec<Box<dyn ChainableMiddleware<C>>>,
-    reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
+/// The Runtime always hands over the real chain, which ends at the [`Reducer`]. Being a trait
+/// rather than a concrete type means a middleware can also be exercised in isolation against any
+/// stand-in, so clients can unit-test their own middlewares without standing up a whole
+/// [`Runtime`](crate::Runtime). Any closure of the right shape is already a `Next`.
+pub trait Next<C: Client> {
+    /// Runs the next middleware, or the reducer when none is left, and returns its products.
+    ///
+    /// The action, state or products may be swapped for different ones here.
+    fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C>;
 }
 
-#[cfg(test)]
-impl<C: Client> MiddlewareStore<C> {
-    pub fn funs(&self) -> &Vec<Box<dyn ChainableMiddleware<C>>> {
-        &self.funs
+impl<C, F> Next<C> for F
+where
+    C: Client,
+    F: FnMut(&mut C::State, C::Action) -> ActionProducts<C>,
+{
+    fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
+        self(state, action)
     }
 }
 
-/// A middleware's handle on the rest of the chain.
-pub struct Next<'n, C: Client> {
-    remaining: &'n mut [Box<dyn ChainableMiddleware<C>>],
-    reducer: fn(&mut C::State, C::Action) -> ActionProducts<C>,
+pub(crate) struct MiddlewareStore<C: Client> {
+    funs: Vec<Box<dyn ChainableMiddleware<C>>>,
+    reducer: Reducer<C>,
 }
 
-impl<C: Client> Next<'_, C> {
-    /// Runs the next middleware, or the reducer when none is left, and returns its products.
-    ///
-    /// The action may be swapped for a different one here.
-    pub fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
+/// The stretch of chain still ahead, walked one middleware at a time until the reducer closes it.
+struct NextMiddlewares<'n, C: Client> {
+    remaining: &'n mut [Box<dyn ChainableMiddleware<C>>],
+    reducer: Reducer<C>,
+}
+
+impl<C: Client> Next<C> for NextMiddlewares<'_, C> {
+    fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
         match self.remaining.split_first_mut() {
             None => (self.reducer)(state, action),
             Some((current, rest)) => current.execute(
                 state,
                 action,
-                Next {
+                &mut NextMiddlewares {
                     remaining: rest,
                     reducer: self.reducer,
                 },
@@ -68,7 +88,7 @@ impl<C: Client> Next<'_, C> {
 impl<C: Client> MiddlewareStore<C> {
     /// Sends an action through the whole chain and returns the products that come back up.
     pub fn run(&mut self, state: &mut C::State, action: C::Action) -> ActionProducts<C> {
-        Next {
+        NextMiddlewares {
             remaining: &mut self.funs,
             reducer: self.reducer,
         }
@@ -92,7 +112,6 @@ mod tests {
     use Log::{Entered, Exited};
     use enumset::EnumSetType;
     use std::cell::RefCell;
-    use std::collections::VecDeque;
     use std::rc::Rc;
 
     struct TestClient;
@@ -135,9 +154,9 @@ mod tests {
         fn process(
             self,
             _: &mut (),
-            _: &mut VecDeque<Message<TestAction, TestRuntime>>,
             _: &MessageSender<Message<TestAction, TestRuntime>>,
-        ) {
+        ) -> Vec<Message<TestAction, TestRuntime>> {
+            vec![]
         }
     }
 
@@ -173,7 +192,7 @@ mod tests {
             &mut self,
             state: &mut Vec<TestAction>,
             action: TestAction,
-            mut next: Next<TestClient>,
+            next: &mut dyn Next<TestClient>,
         ) -> ActionProducts<TestClient> {
             self.logger.borrow_mut().push(Entered(self.name));
             let products = next.run(state, action);
@@ -191,7 +210,7 @@ mod tests {
             &mut self,
             _state: &mut Vec<TestAction>,
             _action: TestAction,
-            _next: Next<TestClient>,
+            _next: &mut dyn Next<TestClient>,
         ) -> ActionProducts<TestClient> {
             self.logger.borrow_mut().push(Entered(self.name));
             ActionProducts::none().with_dirty(TestFlag::B)
@@ -206,9 +225,24 @@ mod tests {
             &mut self,
             state: &mut Vec<TestAction>,
             _action: TestAction,
-            mut next: Next<TestClient>,
+            next: &mut dyn Next<TestClient>,
         ) -> ActionProducts<TestClient> {
             next.run(state, self.new_action.clone())
+        }
+    }
+
+    struct StateMutatingMiddleware {
+        injected: TestAction,
+    }
+    impl ChainableMiddleware<TestClient> for StateMutatingMiddleware {
+        fn execute(
+            &mut self,
+            state: &mut Vec<TestAction>,
+            action: TestAction,
+            next: &mut dyn Next<TestClient>,
+        ) -> ActionProducts<TestClient> {
+            state.push(self.injected.clone());
+            next.run(state, action)
         }
     }
 
@@ -220,7 +254,7 @@ mod tests {
             &mut self,
             state: &mut Vec<TestAction>,
             action: TestAction,
-            mut next: Next<TestClient>,
+            next: &mut dyn Next<TestClient>,
         ) -> ActionProducts<TestClient> {
             next.run(state, action).with_dirty(self.flag)
         }
@@ -330,6 +364,27 @@ mod tests {
         store.run(&mut state, TestAction("basic"));
 
         assert_eq!(state, vec![TestAction("replacement")]);
+    }
+
+    #[test]
+    fn middleware_mutating_state_should_apply_it_before_rest_of_chain_runs() {
+        let mut store = MiddlewareStore::new(
+            vec![
+                boxed(StateMutatingMiddleware {
+                    injected: TestAction("injected"),
+                }),
+                boxed(TestMiddleware {
+                    name: "downstream",
+                    logger: Logger::default(),
+                }),
+            ],
+            witness_reducer,
+        );
+        let mut state = vec![];
+
+        store.run(&mut state, TestAction("basic"));
+
+        assert_eq!(state, vec![TestAction("injected"), TestAction("basic")]);
     }
 
     #[test]
