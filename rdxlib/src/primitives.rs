@@ -14,7 +14,7 @@ use crate::error::RuntimeError;
 use std::panic::UnwindSafe;
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::{Receiver, SendError, TryRecvError};
-use std::sync::{Condvar, MutexGuard, PoisonError, RwLock};
+use std::sync::{Condvar, MutexGuard, PoisonError};
 use std::{
     panic,
     sync::{

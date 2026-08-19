@@ -1,6 +1,6 @@
 use super::{
     AppState, Dirty, EnumSet, Expense, ModelAction, ModelState, MoniDomainError, MoniError,
-    MoniProducts, PlainListViewState, RunningAction, RunningState, State, Uuid, Zoned,
+    MoniProducts, PlainListViewState, RunningAction, RunningState, State, Zoned,
     cmd::{AsyncCmd, DelayedSaveProduct, PersistenceCmd, TimeSubscriptionCmd},
     debug,
 };
