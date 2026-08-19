@@ -23,7 +23,7 @@ use boltffi::{EventSubscription, data, export, ffi_stream};
 use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
-use rdxlib::util::{MessageSend, MessageSender, RuntimeHandle};
+use rdxlib::util::{MessageSend, MessageSender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::{
@@ -34,6 +34,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, SystemClockSource};
 use uuid::Uuid;
+use rdxlib::RuntimeHandle;
 
 #[data]
 #[derive(Clone, Debug)]
@@ -82,7 +83,7 @@ impl PlainListViewHandler {
 
     #[ffi_stream(item = MoniExpensePlainListSnapshot)]
     pub fn subscribe(&self) -> Arc<EventSubscription<MoniExpensePlainListSnapshot>> {
-        let out = LibOutput::new(256);
+        let out = LibOutput::new();
 
         if self
             .action_sender
@@ -140,10 +141,13 @@ impl MoniLib {
                         error!("Error while trying to response back after successful runtime init");
                         return;
                     }
-                    runtime_init.runtime.run();
-                    info!("MoniLib run loop ended");
+                    match runtime_init.runtime.run() {
+                        Ok(_) => info!("MoniLib run loop ended"),
+                        Err(e) => error!("MoniLib run loop ended with fatal error {e:?}"),
+                    }
                 }
                 Err(error) => {
+                    error!("Error initializing Runtime");
                     _ = ready_tx.send(Err(error));
                 }
             }
@@ -167,7 +171,7 @@ impl MoniLib {
     #[must_use]
     pub fn create_plain_list_view(&self) -> PlainListViewHandler {
         PlainListViewHandler {
-            token: Uuid::now_v7().into(),
+            token: Uuid::new_v4().into(),
             action_sender: self.action_sender.clone(),
         }
     }
@@ -204,7 +208,7 @@ impl MoniLib {
 
     #[ffi_stream(item = Vec<MoniError>)]
     pub fn errors(&self) -> Arc<EventSubscription<Vec<MoniError>>> {
-        let out = LibOutput::new(8);
+        let out = LibOutput::new();
 
         if self
             .action_sender
@@ -219,7 +223,7 @@ impl MoniLib {
 
     #[ffi_stream(item = MoniStatistics)]
     pub fn statistics(&self) -> Arc<EventSubscription<MoniStatistics>> {
-        let out = LibOutput::new(8);
+        let out = LibOutput::new();
 
         if self
             .action_sender

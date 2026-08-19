@@ -6,11 +6,10 @@ use crate::runtime::cmd::Subscription::{Debounce, Time};
 use crate::runtime::services::{Service, Services};
 use crate::runtime::{Expense, ModelState, MoniProducts, Statistics, StatisticsResults};
 use crate::runtime::{MoniCommand, MoniLibClient, MoniMessage};
-use crate::util::{CancellationCheck, VersionedArc};
+use crate::util::VersionedArc;
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
-use rdxlib::util::MessageSender;
-use std::collections::VecDeque;
+use rdxlib::util::{CancellationCheck, MessageSender};
 use std::panic::UnwindSafe;
 use std::time::Duration;
 use uuid::Uuid;
@@ -27,9 +26,8 @@ impl EnvironmentCommand for ServiceCommand {
     fn process(
         self,
         env: &mut Services,
-        pending: &mut VecDeque<MoniMessage>,
         _messages_tx: &MessageSender<MoniMessage>,
-    ) {
+    ) -> Vec<MoniMessage> {
         let result = match self {
             ServiceCommand::Persistence(p_cmd) => env.persistence.execute(p_cmd),
             ServiceCommand::Subscribe(s_cmd) => match s_cmd {
@@ -38,8 +36,9 @@ impl EnvironmentCommand for ServiceCommand {
             },
         };
 
-        if let Err(error) = result {
-            pending.push_back(RunningAction::Error(error).into());
+        match result {
+            Err(error) => vec![RunningAction::Error(error).into()],
+            Ok(()) => vec![],
         }
     }
 }
@@ -169,7 +168,7 @@ impl From<DebounceCmd> for Subscription {
 impl From<AsyncCmd> for MoniCommand {
     fn from(cmd: AsyncCmd) -> Self {
         Cmd::Async(AsyncTask {
-            name: cmd.name().to_string(),
+            id: cmd.name().to_string(),
             job: cmd.into_job(),
         })
     }

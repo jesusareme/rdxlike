@@ -201,9 +201,10 @@ impl<V> ViewOutput<V> for LibOutput<V>
 where
     V: Send + 'static,
 {
-    fn new(capacity: usize) -> Self {
+    fn new() -> Self {
         LibOutput {
-            output: Arc::new(EventSubscription::new(capacity)),
+            // High capacity to avoid event dropping
+            output: Arc::new(EventSubscription::new(512)),
         }
     }
 

@@ -1,13 +1,11 @@
 use jiff::Zoned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
-use std::sync::PoisonError;
 use std::time::Instant;
 use std::{
     ops::Deref,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
-use uuid::Uuid;
 
 pub trait ClockSource {
     fn now_civil(&self) -> Zoned;
@@ -56,55 +54,6 @@ impl From<ExpenseId> for u64 {
 impl Display for ExpenseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("ExpenseId").field(&self.0).finish()
-    }
-}
-
-#[derive(Debug)]
-pub struct DropCancellation(Arc<RwLock<bool>>, Uuid);
-
-impl DropCancellation {
-    pub fn new(uuid: Uuid) -> Self {
-        DropCancellation(Arc::new(RwLock::new(false)), uuid)
-    }
-    pub fn cancellation_check(&self) -> CancellationCheck {
-        CancellationCheck(self.0.clone(), self.1)
-    }
-}
-
-#[derive(Debug)]
-pub struct CancellationCheck(Arc<RwLock<bool>>, Uuid);
-impl CancellationCheck {
-    pub fn is_cancelled(&self) -> bool {
-        *self.0.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub fn still_working(&self) -> Option<()> {
-        (!self.is_cancelled()).then_some(())
-    }
-}
-
-impl Drop for DropCancellation {
-    fn drop(&mut self) {
-        let mut guard = self.0.write().unwrap_or_else(PoisonError::into_inner);
-        *guard = true;
-    }
-}
-
-impl Clone for CancellationCheck {
-    fn clone(&self) -> Self {
-        CancellationCheck(self.0.clone(), self.1)
-    }
-}
-
-impl PartialEq for CancellationCheck {
-    fn eq(&self, other: &Self) -> bool {
-        self.1.eq(&other.1)
-    }
-}
-
-impl PartialEq for DropCancellation {
-    fn eq(&self, other: &Self) -> bool {
-        self.1 == other.1
     }
 }
 

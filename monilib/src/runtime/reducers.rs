@@ -11,12 +11,13 @@ use crate::runtime::Dirty::Statistics;
 use crate::runtime::Statistics as StatisticsData;
 use crate::runtime::cmd::DebounceCmd::DelayedSave;
 use crate::runtime::model_views::ClockedModelStateView;
-use crate::util::{DropCancellation, ExpenseId, IdSource};
+use crate::util::{ExpenseId, IdSource};
 use crate::{action::Action, runtime::cmd::DebounceAction::Cancel};
 use rdxlib::cmd::Cmd::Direct;
 use std::fmt::Debug;
 use std::mem;
 use tracing::error;
+use rdxlib::util::DropCancellation;
 
 pub fn reducer(state: &mut State, action: Action) -> MoniProducts {
     use Action::{Init, InitResult, Running, Working};
@@ -277,7 +278,7 @@ fn request_statistics(state: &mut ClockedModelStateView) -> MoniProducts {
                 return MoniProducts::none();
             }
 
-            let cancellation_token = DropCancellation::new(Uuid::new_v4());
+            let cancellation_token = DropCancellation::new();
             let cancellation_check = cancellation_token.cancellation_check();
 
             state.tasks.statistics_running = Some(cancellation_token);

@@ -15,7 +15,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "*", features = ["env-filter"] }
 jiff = { version = "0.2.31", features = ["serde", "std"] }
 enumset = "1.1"
-rand = "0.10.1"
 log = "0.4.29"
 rdxlib = { path = "../rdxlib"}
 

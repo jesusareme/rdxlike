@@ -1,6 +1,6 @@
 use crate::MoniValidationError;
 use boltffi::{data, error};
-use rdxlib::error::InitError;
+use rdxlib::error::RuntimeError;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -108,8 +108,8 @@ impl Display for MoniDomainError {
     }
 }
 
-impl From<InitError> for MoniError {
-    fn from(error: InitError) -> Self {
+impl From<RuntimeError> for MoniError {
+    fn from(error: RuntimeError) -> Self {
         tracing::error!("Lib component could not be initialized: {error}");
         MoniError::from(LibErrorCause::Threading)
     }
@@ -117,7 +117,7 @@ impl From<InitError> for MoniError {
 
 impl From<io::Error> for MoniError {
     fn from(error: io::Error) -> Self {
-        MoniError::from(InitError::ThreadSpawn(error))
+        MoniError::from(RuntimeError::ThreadSpawn(error))
     }
 }
 

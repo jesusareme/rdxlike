@@ -5,7 +5,7 @@ mod reducers;
 mod services;
 mod subscribers;
 
-use crate::util::{ClockSource, DropCancellation, ExpenseId};
+use crate::util::{ClockSource, ExpenseId};
 use crate::{
     MoniDomainError, MoniError,
     action::{Action, LibAction, ModelAction, RunningAction, WorkingAction},
@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
-use rdxlib::error::InitError;
+use rdxlib::error::RuntimeError;
 pub use services::PersistenceError;
 use tracing::{debug, error};
 
@@ -33,7 +33,7 @@ use rdxlib::messages::Message;
 use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
-use rdxlib::util::MessageSend;
+use rdxlib::util::{DropCancellation, MessageSend};
 use rdxlib::{Client, RuntimeBuilder, RuntimeConfig, RuntimeInit};
 
 use crate::action::Action::Init;
@@ -137,7 +137,7 @@ fn subscription_reducer(subscription: LibSubscription) -> RuntimeProducts<MoniLi
     }
 }
 
-fn unstarted_subscriber(name: &str, cause: InitError) -> RuntimeProducts<MoniLibClient> {
+fn unstarted_subscriber(name: &str, cause: RuntimeError) -> RuntimeProducts<MoniLibClient> {
     let message =
         format!("Unable to start the {name} subscriber, subscription is dropped: {cause}");
     error!(message);

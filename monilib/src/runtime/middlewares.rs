@@ -15,7 +15,7 @@ impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
         &mut self,
         state: &mut State,
         action: Action,
-        mut next: Next<MoniLibClient>,
+        next: &mut dyn Next<MoniLibClient>,
     ) -> MoniProducts {
         use MoniMiddleware::{Clock, Logger};
         match self {
@@ -49,10 +49,7 @@ mod tests {
     use crate::testing::{StuckClock, contemporary_ref_date};
     use jiff::Zoned;
     use rdxlib::cmd::Cmd;
-    use rdxlib::middleware::MiddlewareStore;
     use rstest::rstest;
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     fn next_products() -> MoniProducts {
         MoniProducts::cmd(Cmd::Direct(vec![WorkingAction::Save.into()]))
@@ -74,86 +71,69 @@ mod tests {
         );
     }
 
-    fn fake_reducer(_: &mut State, action: Action) -> MoniProducts {
-        assert!(matches!(action, Action::Init));
-        next_products()
-    }
-
-    fn stuck_clock() -> MoniMiddleware {
-        MoniMiddleware::Clock(Arc::new(StuckClock::default()))
-    }
-
     struct FakeNext {
-        pub calls: Rc<Cell<u8>>,
-        pub expected_time: Option<Zoned>,
+        calls: u8,
+        expected_time: Option<Zoned>,
     }
 
     impl FakeNext {
         fn new() -> Self {
             FakeNext {
-                calls: Rc::new(Cell::new(0)),
+                calls: 0,
                 expected_time: None,
             }
         }
     }
 
-    impl ChainableMiddleware<MoniLibClient> for FakeNext {
-        fn execute(
-            &mut self,
-            state: &mut State,
-            action: Action,
-            mut next: Next<MoniLibClient>,
-        ) -> MoniProducts {
-            self.calls.update(|calls| calls + 1);
+    impl Next<MoniLibClient> for FakeNext {
+        fn run(&mut self, state: &mut State, action: Action) -> MoniProducts {
+            self.calls += 1;
             assert!(matches!(action, Action::Init));
             if let Some(expected) = &self.expected_time {
                 assert_eq!(&state.running.time, expected);
             }
-            next.run(state, action)
+            next_products()
         }
     }
 
-    fn chain(middleware: MoniMiddleware, next: FakeNext) -> MiddlewareStore<MoniLibClient> {
-        MiddlewareStore::new(vec![middleware.boxed(), Box::new(next)], fake_reducer)
-    }
-
     #[rstest]
-    #[case::clock(stuck_clock())]
+    #[case::clock(MoniMiddleware::Clock(Arc::new(StuckClock::default())))]
     #[case::logger_both(MoniMiddleware::Logger { prev: true, post: true })]
     #[case::logger_prev_only(MoniMiddleware::Logger { prev: true, post: false })]
     #[case::logger_post_only(MoniMiddleware::Logger { prev: false, post: true })]
     #[case::logger_none(MoniMiddleware::Logger { prev: false, post: false })]
-    fn middleware_should_call_next_and_sink_products(#[case] middleware: MoniMiddleware) {
-        let next = FakeNext::new();
-        let calls = next.calls.clone();
-        let mut store = chain(middleware, next);
+    fn middleware_should_call_next_once_and_sink_its_products_untouched(
+        #[case] mut middleware: MoniMiddleware,
+    ) {
+        let mut next = FakeNext::new();
         let mut state = State::default();
 
-        let products = store.run(&mut state, Action::Init);
+        let products = middleware.execute(&mut state, Action::Init, &mut next);
 
         assert_products(products);
-        assert_eq!(calls.get(), 1);
+        assert_eq!(next.calls, 1);
     }
 
     #[rstest]
     #[case::zero(AppState::Zero(vec![]))]
     #[case::failed(AppState::Failed)]
     #[case::working(AppState::Working(ModelState::default()))]
-    fn clock_middleware_sets_time_before_next_runs(#[case] app: AppState) {
+    fn clock_middleware_should_set_time_from_source_before_rest_of_chain_runs(
+        #[case] app: AppState,
+    ) {
         let mut next = FakeNext::new();
         next.expected_time = Some(contemporary_ref_date());
-        let calls = next.calls.clone();
-        let mut store = chain(stuck_clock(), next);
+        let mut middleware = MoniMiddleware::Clock(Arc::new(StuckClock::default()));
         let mut state = State {
             app,
             ..State::default()
         };
         assert_ne!(state.running.time, contemporary_ref_date());
 
-        let products = store.run(&mut state, Action::Init);
+        let products = middleware.execute(&mut state, Action::Init, &mut next);
 
         assert_products(products);
-        assert_eq!(calls.get(), 1);
+        assert_eq!(next.calls, 1);
         assert_eq!(state.running.time, contemporary_ref_date());
     }
 }

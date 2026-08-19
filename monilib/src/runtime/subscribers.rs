@@ -6,7 +6,7 @@ use crate::util::ExpenseId;
 use crate::{MoniError, MoniExpensePlainListSnapshot};
 use enumset::EnumSet;
 use jiff::Timestamp;
-use rdxlib::error::InitError;
+use rdxlib::error::RuntimeError;
 use rdxlib::subscribers::ComparableResult::{self, Comparable, NothingToCompare};
 use rdxlib::subscribers::{OutputSubscriber, Subscriber, SubscriberError, ViewId, ViewTransformer};
 use std::cmp::min;
@@ -19,13 +19,13 @@ use uuid::Uuid;
 pub fn plain_list_view_subscriber(
     id: ViewId,
     out: LibOutput<MoniExpensePlainListSnapshot>,
-) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
+) -> Result<impl Subscriber<Client = MoniLibClient>, RuntimeError> {
     OutputSubscriber::new(id, PlainListTransformer::new(), out)
 }
 
 pub fn errors_subscriber(
     out: LibOutput<Vec<MoniError>>,
-) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
+) -> Result<impl Subscriber<Client = MoniLibClient>, RuntimeError> {
     OutputSubscriber::new(Uuid::new_v4().into(), ErrorsViewTransformer::default(), out)
 }
 
@@ -161,7 +161,7 @@ impl ViewTransformer<MoniLibClient> for StatisticsTransformer {
 
 pub fn statistics_subscriber(
     out: LibOutput<MoniStatistics>,
-) -> Result<impl Subscriber<State = State, Flag = Dirty>, InitError> {
+) -> Result<impl Subscriber<Client = MoniLibClient>, RuntimeError> {
     OutputSubscriber::new(Uuid::new_v4().into(), StatisticsTransformer, out)
 }
 
