@@ -365,7 +365,7 @@ mod tests {
     }
 
     #[rstest]
-    fn p_list_initial_derive__should_create_initial_view(mut expenses: [Expense; 20], ids: Vec<u64>) {
+    fn p_list_initial_derive_should_create_initial_view(mut expenses: [Expense; 20], ids: Vec<u64>) {
         let mut transformer = PlainListTransformer::default();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(Vec::from(expenses.clone())),
