@@ -365,7 +365,7 @@ mod tests {
     }
 
     #[rstest]
-    fn p_list_derive_initial_view(mut expenses: [Expense; 20], ids: Vec<u64>) {
+    fn p_list_initial_derive__should_create_initial_view(mut expenses: [Expense; 20], ids: Vec<u64>) {
         let mut transformer = PlainListTransformer::default();
         let state = PlainListStateSlice {
             expenses: VersionedArc::from(Vec::from(expenses.clone())),
@@ -711,7 +711,7 @@ mod tests {
     }
 
     #[rstest]
-    fn p_list_comparable_reflects_hint_changes(expenses: [Expense; 20]) {
+    fn p_list_comparable_should_reflect_hint_changes(expenses: [Expense; 20]) {
         let token = ViewId::from(Uuid::now_v7());
         let mut state = State {
             app: AppState::Working(ModelState {

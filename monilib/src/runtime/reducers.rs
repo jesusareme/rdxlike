@@ -545,7 +545,7 @@ mod reducer_model_test {
         EnumSet::only(Dirty::FinancesBeforeThisMonth)
     )]
     #[case::current_month(expense_in_ref_month(), EnumSet::only(Dirty::FinancesCurrentMonth))]
-    fn reducer_model_add_expense(#[case] expense: Expense, #[case] dirty: EnumSet<Dirty>) {
+    fn reducer_model_add_expense_should_add_to_state_no_errors(#[case] expense: Expense, #[case] dirty: EnumSet<Dirty>) {
         let mut state = ModelState::default();
         let mut errors = vec![];
 
@@ -567,7 +567,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_add_expense_sorted() {
+    fn reducer_model_add_expense_should_keep_state_sorted() {
         let original = expenses_list(contemporary_ref_date(), 1.month());
 
         for expenses_perm in original.iter().permutations(original.len()) {
@@ -599,7 +599,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_add_expense_same_date_inserts_newest_last() {
+    fn reducer_model_add_expense_same_date_should_insert_newest_last() {
         let shared = contemporary_ref_date().first_of_month().unwrap();
         let first = Expense {
             id: ExpenseId::from(0),
@@ -634,7 +634,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_add_expense_into_mid_list() {
+    fn reducer_model_add_expense_past_not_earliest_should_insert_mid_list() {
         let expenses = expenses_list(contemporary_ref_date(), 1.month());
         let mid = Expense {
             id: ExpenseId::from(expenses.len() as u64),
@@ -663,7 +663,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_add_expense_contains_sorted() {
+    fn reducer_model_add_expense_should_contain_sorted() {
         let expenses: Vec<Expense> = Vec::new();
 
         let mut state = ModelState::default();
@@ -708,7 +708,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_edit_expense_same_fields_no_products() {
+    fn reducer_model_edit_expense_same_fields_should_not_generate_products() {
         let expense = expense_in_ref_month();
         let mut state = ModelState {
             movements: VersionedArc::from(vec![expense.clone()]),
@@ -730,7 +730,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_edit_expense_fields_updated_products_and_delayed_save() {
+    fn reducer_model_edit_expense_fields_updated_should_generate_products_and_delayed_save() {
         let original = expense_in_ref_month();
         let updated = Expense {
             amount: original.amount + 10000,
@@ -765,7 +765,7 @@ mod reducer_model_test {
     #[case::same(0.months(), [0, 1, 2])]
     #[case::collides_last_and_wins(1.month(), [0, 2, 1])]
     #[case::collides_first_and_loses(-1.month(), [0, 1, 2])]
-    fn reducer_model_edit_expense_move_dates_ordering(
+    fn reducer_model_edit_expense_move_should_preserve_date_ordering(
         #[case] offset: Span,
         #[case] expected_ordering: [usize; 3],
     ) {
@@ -807,7 +807,7 @@ mod reducer_model_test {
     #[case::current_to_before(2, -1.month(), Dirty::FinancesBeforeThisMonth | Dirty::FinancesCurrentMonth)]
     #[case::current_stays(2, 0.months(), EnumSet::only(Dirty::FinancesCurrentMonth))]
     #[case::current_to_same_month_previous_year(2, -12.months(), Dirty::FinancesBeforeThisMonth | Dirty::FinancesCurrentMonth)]
-    fn reducer_model_edit_expense_move_dates_dirty_flags(
+    fn reducer_model_edit_expense_move_dates_should_generate_dirty_flags(
         #[case] index: usize,
         #[case] offset: Span,
         #[case] expected_dirty: EnumSet<Dirty>,
@@ -841,7 +841,7 @@ mod reducer_model_test {
     }
 
     #[test]
-    fn reducer_model_edit_expense_same_month_previous_year_flags_before() {
+    fn reducer_model_edit_expense_same_month_previous_year_should_generate_flags_before() {
         let original = Expense {
             date: &contemporary_ref_date() - 12.months(),
             ..Expense::default()
@@ -881,7 +881,7 @@ mod reducer_model_test {
         EnumSet::only(Dirty::FinancesBeforeThisMonth)
     )]
     #[case::current_month(expense_in_ref_month(), EnumSet::only(Dirty::FinancesCurrentMonth))]
-    fn reducer_model_delete_expense(#[case] expense: Expense, #[case] dirty: EnumSet<Dirty>) {
+    fn reducer_model_delete_expense_should_generate_dirty_flags(#[case] expense: Expense, #[case] dirty: EnumSet<Dirty>) {
         let mut state = ModelState {
             movements: VersionedArc::from(vec![expense.clone()]),
             ..ModelState::default()
@@ -930,7 +930,7 @@ mod reducer_model_test {
     #[case::first(0)]
     #[case::mid(3)]
     #[case::last(5)]
-    fn reducer_model_delete_expense_preserves_order(#[case] index: usize) {
+    fn reducer_model_delete_expense_should_preserve_order(#[case] index: usize) {
         let expenses = expenses_list(contemporary_ref_date(), 1.month());
         let removed = expenses[index].clone();
         let mut expected = expenses.clone();

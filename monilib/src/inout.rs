@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn into_add_intent_no_date_stays_empty() {
+    fn into_add_intent_no_date_should_stay_empty() {
         let m_expense = MoniExpense::default();
         let clock = StuckClock {
             stuck_at: distant_future_ref_date(),
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn into_add_intent_date_future() {
+    fn into_add_intent_date_future_should_fail() {
         let m_expense = MoniExpense {
             date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn into_add_intent_date_past() {
+    fn into_add_intent_date_past_should_ok() {
         let m_expense = MoniExpense {
             date: Some(distant_future_ref_date().into()),
             ..MoniExpense::default()
@@ -384,7 +384,7 @@ mod tests {
     #[case::at_upper_limit(MoniExpense::AMOUNT_LIMIT, true)]
     #[case::at_lower_limit(-MoniExpense::AMOUNT_LIMIT, true)]
     #[case::within_limits(4200, true)]
-    fn into_add_intent_validates_amount(#[case] amount: i64, #[case] valid: bool) {
+    fn into_add_intent_should_validate_amount(#[case] amount: i64, #[case] valid: bool) {
         let m_expense = MoniExpense {
             amount,
             ..MoniExpense::default()
@@ -410,7 +410,7 @@ mod tests {
     #[case::at_upper_limit(MoniExpense::AMOUNT_LIMIT, true)]
     #[case::at_lower_limit(-MoniExpense::AMOUNT_LIMIT, true)]
     #[case::within_limits(4200, true)]
-    fn into_updatable_expense_validates_amount(#[case] amount: i64, #[case] valid: bool) {
+    fn into_updatable_expense_should_validate_amount(#[case] amount: i64, #[case] valid: bool) {
         let m_expense = MoniExpense {
             date: Some(distant_past_ref_date().into()),
             amount,

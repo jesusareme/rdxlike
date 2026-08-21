@@ -113,7 +113,7 @@ mod test_versioned {
     use std::ops::Deref;
 
     #[test]
-    fn versioned_inc_version_mut_ref() {
+    fn versioned_update_should_inc_version() {
         let mut versioned = VersionedArc::from(42);
         versioned.update_with(|value| *value += 1);
         assert_eq!(versioned.version, 1);
@@ -125,7 +125,7 @@ mod test_versioned {
     }
 
     #[test]
-    fn versioned_no_inc_version_ref() {
+    fn versioned_no_update_should_not_inc_version() {
         let versioned = VersionedArc::from(42);
         let value1 = *versioned;
         let value2 = versioned.deref();
