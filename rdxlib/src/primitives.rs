@@ -208,58 +208,41 @@ impl<T> Iterator for OneSlotReceiver<T> {
 #[cfg(test)]
 mod tests_one_slot_channel {
     use super::one_slot_channel;
-    use crate::primitives::tests_one_slot_channel::TimedOutTestState::{Finished, Ready};
     use std::sync::mpsc::{RecvError, TryRecvError};
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::{Arc, Barrier, Condvar, Mutex};
     use std::thread;
     use std::time::Duration;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
-    enum TimedOutTestState<R> {
-        Preparing,
-        Ready,
-        Finished(R),
-    }
-    impl<R> TimedOutTestState<R> {
-        pub fn is_finished(&self) -> bool {
-            matches!(self, Finished(_))
-        }
-
-        pub fn is_ready(&self) -> bool {
-            matches!(self, Ready)
-        }
-    }
-
     fn execute_with_timeout<J, P, R>(timeout: Duration, job: J, prepare: P) -> R
     where
         J: FnOnce() -> R + Send + 'static,
         P: FnOnce() + Send + 'static,
-        R: Clone + Send + 'static,
+        R: Send + 'static,
     {
-        let sync = Arc::new((Mutex::new(TimedOutTestState::Preparing), Condvar::new()));
+        let warmup_barrier = Arc::new(Barrier::new(2));
+        let warmup_remote_barrier = warmup_barrier.clone();
+
+        let sync: Arc<(Mutex<Option<R>>, Condvar)> = Arc::new((Mutex::new(None), Condvar::new()));
         let sync_remote = sync.clone();
 
         thread::spawn(move || {
-            let mut guard = sync_remote
-                .1
-                .wait_while(sync_remote.0.lock().unwrap(), |s| !s.is_ready())
-                .expect("we should not err under normal test conditions");
+            warmup_remote_barrier.wait();
             let result = job();
-            *guard = Finished(result);
+            sync_remote.0.lock().unwrap().replace(result);
             sync_remote.1.notify_all();
         });
 
         prepare();
-        *sync.0.lock().unwrap() = Ready;
-        sync.1.notify_all();
+        warmup_barrier.wait();
         match sync
             .1
-            .wait_timeout_while(sync.0.lock().unwrap(), timeout, |s| !s.is_finished())
+            .wait_timeout_while(sync.0.lock().unwrap(), timeout, |s| s.is_none())
         {
-            Ok((guard, _result)) => {
-                if let Finished(ref value) = *guard {
-                    value.clone()
+            Ok((mut guard, _result)) => {
+                if let Some(value) = guard.take() {
+                    value
                 } else {
                     panic!("Test time-out");
                 }
