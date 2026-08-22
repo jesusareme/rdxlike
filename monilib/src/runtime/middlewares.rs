@@ -7,7 +7,7 @@ use tracing::debug;
 
 pub enum MoniMiddleware {
     Logger { prev: bool, post: bool },
-    Clock(Arc<dyn ClockSource>),
+    Clock(Arc<dyn ClockSource + Send + Sync>),
 }
 
 impl ChainableMiddleware<MoniLibClient> for MoniMiddleware {
