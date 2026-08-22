@@ -85,13 +85,6 @@ extension MoniDomainError: @retroactive CustomStringConvertible {
                 self.errors.append(contentsOf: newErrors)
             }
         }
-        self.statisticsTask = Task { [weak self, lib] in
-            for await statistics in lib.statistics() {
-                guard let self else { return }
-                self.latestStatistics = statistics
-                showStatistics = true
-            }
-        }
     }
 
 
@@ -100,6 +93,15 @@ extension MoniDomainError: @retroactive CustomStringConvertible {
     }
     
     public func calculateStatistics() {
+        if statisticsTask == nil {
+            self.statisticsTask = Task { [weak self, lib] in
+                for await statistics in lib.statistics() {
+                    guard let self else { return }
+                    self.latestStatistics = statistics
+                    showStatistics = true
+                }
+            }
+        }
         do {
             try lib.calculateStatisticsAll()
         } catch {
@@ -174,7 +176,7 @@ public enum ExpenseListItem: Identifiable {
     
     public func add() {
         do {
-            try lib.addExpense(expense: .random(maxAmount: MoniInfo.getMax()))
+            try lib.addExpense(expense: .random(maxAmount: MoniInfo.getMax() / 10000))
         } catch {
             print("Error adding expense: \(error)")
         }

@@ -24,12 +24,9 @@ use log::warn;
 use rdxlib::messages::Message;
 use rdxlib::subscribers::{ViewId, ViewOutput};
 use rdxlib::util::{MessageSend, MessageSender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use std::{
-    sync::{Arc, mpsc},
-    thread::Builder,
-};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use util::{ClockSource, SystemClockSource};
@@ -124,47 +121,21 @@ impl MoniLib {
             LibClockSource::System => Arc::new(SystemClockSource),
         };
         let shared_clock = clock.clone();
-
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<RuntimeHandle<MoniLibClient>, MoniError>>();
-
-        let builder = Builder::new().name("messages".to_string());
-        let lib_thread_handle = builder.spawn(move || {
-            let env = RuntimeEnvironment {
-                logging_enabled_pre_action: true,
-                logging_enabled_post_action: true,
-                path,
-                clock: shared_clock,
-            };
-            match runtime::new(env) {
-                Ok(runtime_init) => {
-                    if ready_tx.send(Ok(runtime_init.handle)).is_err() {
-                        error!("Error while trying to response back after successful runtime init");
-                        return;
-                    }
-                    match runtime_init.runtime.run() {
-                        Ok(_) => info!("MoniLib run loop ended"),
-                        Err(e) => error!("MoniLib run loop ended with fatal error {e:?}"),
-                    }
-                }
-                Err(error) => {
-                    error!("Error initializing Runtime");
-                    _ = ready_tx.send(Err(error));
-                }
-            }
-            info!("MoniLib thread ended");
+        
+        let runtime_init = runtime::start(RuntimeEnvironment {
+            logging_enabled_pre_action: true,
+            logging_enabled_post_action: true,
+            path,
+            clock: shared_clock,
         })?;
 
-        let runtime_handle = ready_rx
-            .recv()
-            .map_err(|_| MoniError::from(LibErrorCause::Threading))??;
-
-        let action_sender = runtime_handle.create_sender();
+        let action_sender = runtime_init.handle.create_sender();
 
         Ok(MoniLib {
-            runtime_handle,
+            runtime_handle: runtime_init.handle,
             action_sender,
             clock,
-            lib_thread_handle,
+            lib_thread_handle: runtime_init.thread,
         })
     }
 

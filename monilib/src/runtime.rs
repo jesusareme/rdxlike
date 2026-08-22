@@ -19,12 +19,13 @@ use services::Services;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::thread::{Builder, JoinHandle};
 
 use crate::inout::PlainListItem;
 use crate::runtime::subscribers::statistics_subscriber;
 use rdxlib::error::RuntimeError;
 pub use services::PersistenceError;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::runtime::cmd::ServiceCommand;
 use crate::runtime::middlewares::MoniMiddleware;
@@ -34,7 +35,7 @@ use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
 use rdxlib::util::{DropCancellation, MessageSend};
-use rdxlib::{Client, RuntimeBuilder, RuntimeConfig, RuntimeInit};
+use rdxlib::{Client, RuntimeConfig, RuntimeHandle, RuntimeRunner};
 
 use crate::action::Action::Init;
 use crate::action::LibSubscription;
@@ -79,13 +80,20 @@ pub struct RuntimeEnvironment {
     pub clock: Arc<dyn ClockSource + Send + Sync>,
 }
 
-pub fn new(config: RuntimeEnvironment) -> Result<RuntimeInit<MoniLibClient>, MoniError> {
-    let builder = RuntimeBuilder::default();
+pub struct RuntimeInit {
+    pub handle: RuntimeHandle<MoniLibClient>,
+    pub thread: JoinHandle<()>,
+}
 
-    let sender = builder.create_sender();
-    let environment = Services::new(&sender, config.path, &config.clock)?;
+pub fn start(config: RuntimeEnvironment) -> Result<RuntimeInit, MoniError> {
+    let (handle, runner) = RuntimeRunner::create();
+    let sender = handle.create_sender();
 
-    let funs = vec![
+    let services = Services::new(&sender, config.path, &config.clock)?;
+    let jobs = ThreadPool::new(8)?;
+    sender.send_message(Init)?;
+
+    let middlewares = vec![
         MoniMiddleware::Logger {
             prev: config.logging_enabled_pre_action,
             post: config.logging_enabled_post_action,
@@ -93,22 +101,27 @@ pub fn new(config: RuntimeEnvironment) -> Result<RuntimeInit<MoniLibClient>, Mon
         MoniMiddleware::Clock(config.clock),
     ];
 
-    let state = State::default();
-
-    sender.send_message(Init)?;
-
-    let runtime_cfg = RuntimeConfig {
-        services: environment,
-        state,
-        middlewares: funs.into_iter().map(MoniMiddleware::boxed).collect(),
-        reducer,
-        runtime_reducer,
-        jobs_dispatcher: ThreadPool::new(8)?,
-    };
-
     debug!("MoniLib ready to run...");
 
-    Ok(builder.create_runtime(runtime_cfg))
+    let thread = Builder::new()
+        .name("messages".to_string())
+        .spawn(move || {
+            let runtime_cfg = RuntimeConfig {
+                services,
+                state: State::default(),
+                middlewares: middlewares.into_iter().map(MoniMiddleware::boxed).collect(),
+                reducer,
+                runtime_reducer,
+                jobs_dispatcher: jobs,
+            };
+            match runner.run(runtime_cfg) {
+                Ok(_) => info!("MoniLib run loop ended"),
+                Err(e) => error!("MoniLib run loop ended with fatal error {e:?}"),
+            }
+            info!("MoniLib thread ended");
+        })?;
+
+    Ok(RuntimeInit { handle, thread })
 }
 
 fn runtime_reducer(lib_message: LibAction) -> RuntimeProducts<MoniLibClient> {
@@ -170,8 +183,9 @@ pub(crate) struct State {
 pub struct ModelState {
     model_version: u16,
     movements: VersionedArc<Vec<Expense>>,
-    statistics_all: Option<Statistics>,
     ids: Ids,
+    #[serde(skip)]
+    statistics_all: Option<Statistics>,
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Default)]

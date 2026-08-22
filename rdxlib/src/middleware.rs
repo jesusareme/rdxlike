@@ -37,10 +37,7 @@ pub trait ChainableMiddleware<C: Client> {
 
 /// A middleware's handle on the rest of the chain.
 ///
-/// The Runtime always hands over the real chain, which ends at the [`Reducer`]. Being a trait
-/// rather than a concrete type means a middleware can also be exercised in isolation against any
-/// stand-in, so clients can unit-test their own middlewares without standing up a whole
-/// [`Runtime`](crate::Runtime). Any closure of the right shape is already a `Next`.
+/// The Runtime always hands over the real chain, which ends at the [`Reducer`].
 pub trait Next<C: Client> {
     /// Runs the next middleware, or the reducer when none is left, and returns its products.
     ///

@@ -8,7 +8,7 @@
 //!
 //! # Architecture
 //!
-//! A single [`Runtime`] owns the application state and drives a loop over incoming
+//! A single `Runtime` owns the application state and drives a loop over incoming
 //! [`Message`]s:
 //!
 //! - [`Message`]s are the incoming data and instructions basic unit, used for both,
@@ -25,10 +25,10 @@
 //! - [`Cmd`]s can be seen as operations that needs out of the runtime data or processing, generally executed
 //! as side effect of an [`Message::Action`], usually as an asynchronous and/or long-running operation (think:
 //! save a file, get some data from a remote API, start reading from a sensor according to a schedule, etc.)
-//! - [`Message::Runtime`] represents runtime related requests to the [`Runtime`]. They run through
+//! - [`Message::Runtime`] represents runtime related requests to the `Runtime`. They run through
 //! the [`RuntimeReducer`] and return [`RuntimeProducts`]: usually a new [`Subscriber`] to register
 //! and/or follow-up actions.
-//! - [`Subscriber`]s are the way out of the [`Runtime`]: they can produce derived artifacts,
+//! - [`Subscriber`]s are the way out of the `Runtime`: they can produce derived artifacts,
 //! useful for the client, based on a read-only copy of the [`State`] (previously mutated
 //! by [`middleware`]s and [`Reducer`]). After a message and everything it cascaded into have
 //! been processed, subscribers interested in the accumulated dirty flags are notified once. A reference
@@ -61,13 +61,13 @@
 //! A [`Client`] is the type-level description of an application: its state, its actions, its dirty
 //! flags and its environment commands. Everything else in this crate is generic over it.
 //!
-//! A [`RuntimeBuilder`] orchestrates [`Runtime`] initialization and provides [`MessageSender`] instances,
-//! which accept [`Message`]s as the only asynchronous way to handle Runtime state and products and
-//! can be used on the [`Runtime`] dependencies such as Services. It finally generates the final
-//! [`Runtime`] instance with [`RuntimeBuilder::create_runtime`] once the [`RuntimeConfig`] struct is filled,
-//! together with the [`RuntimeHandle`], responsible for creating [`MessageSender`]s whenever needed
-//! and stopping Runtime execution through [`RuntimeHandle::cancel`]. [`Runtime`] can also be stopped
-//! by dropping [`RuntimeHandle`].
+//! [`RuntimeRunner::create`] is the starting point: it prepares communication to [`runtime`] and hands
+//! back the [`RuntimeHandle`] together with the [`RuntimeRunner`] itself. The
+//! [`RuntimeHandle`] stays with the client to create [`MessageSender`]s ([`RuntimeHandle::create_sender`])
+//! — which accept [`Message`]s as the only asynchronous way to feed Runtime state and products, and
+//! can be handed to `Runtime` dependencies such as Services — and to stop the Runtime through
+//! [`RuntimeHandle::cancel`] (or by being dropped). Filling a [`RuntimeConfig`] and calling
+//! [`RuntimeRunner::run`] then builds the `Runtime` and starts running its loop.
 //!
 //! ```
 //! use enumset::{EnumSet, EnumSetType};
@@ -77,7 +77,7 @@
 //! use rdxlib::products::{ActionProducts, RuntimeProducts};
 //! use rdxlib::subscribers::{Subscriber, SubscriberError};
 //! use rdxlib::util::{MessageSend, MessageSender};
-//! use rdxlib::{Client, RuntimeBuilder, RuntimeConfig, RuntimeInit};
+//! use rdxlib::{Client, RuntimeConfig, RuntimeRunner};
 //! use std::sync::{Arc, Mutex};
 //!
 //! enum Counter {}
@@ -153,24 +153,22 @@
 //!
 //! let totals = Arc::new(Mutex::new(vec![]));
 //!
-//! let builder = RuntimeBuilder::default();
-//! let sender = builder.create_sender();
+//! let (mut handle, runner) = RuntimeRunner::create();
+//! let sender = handle.create_sender();
 //!
 //! sender.send_message(AddSubscriber(TotalsObserver { totals: totals.clone() })).unwrap();
 //! sender.send_message(Add(2)).unwrap();
 //! sender.send_message(Add(3)).unwrap();
 //!
-//! let RuntimeInit { runtime, mut handle } = builder.create_runtime(RuntimeConfig {
+//! handle.cancel().expect("runtime is ready to work, this should not return error");
+//! let final_state = runner.run(RuntimeConfig {
 //!     services: (),
 //!     state: 0,
 //!     middlewares: vec![],
 //!     reducer,
 //!     runtime_reducer,
 //!     jobs_dispatcher: ThreadPool::new(1).expect("one worker thread"),
-//! });
-//!
-//! handle.cancel().expect("runtime is ready to work, this should not return error");
-//! let final_state = runtime.run().expect("no fatal error, so the final state comes back");
+//! }).expect("no fatal error, so the final state comes back");
 //!
 //! assert_eq!(final_state, 5);
 //! assert_eq!(*totals.lock().unwrap(), vec![0, 2, 5]);
@@ -178,10 +176,10 @@
 //! ```
 //!
 //! Here, the `AddSubscriber` runtime action registers `TotalsObserver`, which is only interested
-//! in registering each final state, hence `[0, 2, 5]`.
+//! in registering each final state, `[0, 2, 5]`.
 //!
 //! [`RuntimeHandle::cancel`] closes the runtime's input: whatever is already queued is still
-//! processed and [`Runtime::run`] returns the final state once it drains. Dropping the handle does
+//! processed and [`RuntimeRunner::run`] returns the final state once it drains. Dropping the handle does
 //! the same, so a client that simply lets it go out of scope shuts the runtime down too.
 
 pub mod cmd;
@@ -215,7 +213,7 @@ use crate::messages::Operation::Stop;
 /// Implemented by a marker style trait; every generic item in this crate is
 /// parameterized by it so a client only has to provide the corresponding type.
 pub trait Client {
-    /// The whole application model owned by the [`Runtime`].
+    /// The whole application model owned by the `Runtime`.
     ///
     /// Client is free to implement and organize state as needed, given Subscribers can observe a
     /// complete (read-only) copy of the state.
@@ -244,7 +242,7 @@ pub trait Client {
     type ServiceCommand: EnvironmentCommand<Client = Self>;
 }
 
-/// [`Message`] type a given [`Client`] exchanges with its [`Runtime`].
+/// [`Message`] type a given [`Client`] exchanges with its `Runtime`.
 /// Subtypes are [`Message::Action`] for model related messages, and [`Message::Runtime`] for runtime-related
 /// actions such as adding a Subscriber corresponding with a new view created on client side.
 pub type ClientMessage<C> = Message<<C as Client>::Action, <C as Client>::RuntimeAction>;
@@ -257,11 +255,11 @@ pub type ClientMessage<C> = Message<<C as Client>::Action, <C as Client>::Runtim
 /// It should not block, access I/O and, in general, avoid costly operations such as cloning big data structures.
 pub type Reducer<C> = fn(&mut <C as Client>::State, <C as Client>::Action) -> ActionProducts<C>;
 
-/// Handles [`Message::Runtime`] messages, which never touch the state but can affect the [`Runtime`] execution
+/// Handles [`Message::Runtime`] messages, which never touch the state but can affect the `Runtime` execution
 /// environment through the types offered on [`RuntimeProducts`].
 pub type RuntimeReducer<C> = fn(<C as Client>::RuntimeAction) -> RuntimeProducts<C>;
 
-/// Everything the [`Runtime`] needs to start, which should be provided by the client.
+/// Everything the `Runtime` needs to start, which should be provided by the client.
 pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
     /// The client's environment, handed to every [`Cmd::Env`] command for the duration of the Runtime.
     pub services: C::Environment,
@@ -284,15 +282,14 @@ pub struct RuntimeConfig<C: Client, JD: JobsDispatcher = ThreadPool> {
 
 /// Owner of the client state and the loop that processes messages it sends.
 ///
-/// Built from a [`RuntimeConfig`] with [`RuntimeBuilder::create_runtime`] and consumed by
-/// [`Runtime::run`], which blocks until [`RuntimeHandle`] is dropped or [`RuntimeHandle::cancel`]
-/// is called, and then returns the final state it was holding.
+/// Built and driven by [`RuntimeRunner::run`], which blocks until [`RuntimeHandle`] is dropped or
+/// [`RuntimeHandle::cancel`] is called, and then returns the final state it was holding.
 ///
 /// Runtime is, by design, not thread-safe (no [`Send`]) and blocks when running so it is expected to be built
 /// and run on its own thread. Communication facilities such as [`MessageSender`] and
 /// [`RuntimeHandle`] are thread-safe and provide the ways to communicate in a safe way with Runtime by message-passing.
 #[allow(clippy::struct_field_names)]
-pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
+pub(crate) struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
     services: C::Environment,
     state: C::State,
     middlewares: MiddlewareStore<C>,
@@ -303,51 +300,55 @@ pub struct Runtime<C: Client, JD: JobsDispatcher = ThreadPool> {
     jobs_dispatcher: JD,
 }
 
-pub struct RuntimeInit<C: Client, JD: JobsDispatcher = ThreadPool> {
-    pub runtime: Runtime<C, JD>,
-    pub handle: RuntimeHandle<C>,
-}
-
-/// Starting point to create a Runtime. It creates  [`MessageSender`] instances that can be used
-/// by Runtime dependencies being built at this point, and creates the final Runtime consuming itself.
-pub struct RuntimeBuilder<C: Client> {
+/// Small utility that owns the Runtime's message channel until [`Self::run`]
+/// turns it into a live `Runtime`.
+///
+/// `Runtime` is `!Send`, [`RuntimeRunner`] is `Send` so that final Runtime execution can be
+/// easily moved to the final destination thread that will own the Runtime's loop.
+///
+/// Create one with [`RuntimeRunner::create`], which also hands back the Runtime's
+/// [`RuntimeHandle`]. Keep the [`RuntimeHandle`] on the Client's controlling thread to create
+/// [`MessageSender`]s ([`RuntimeHandle::create_sender`]) and to stop
+/// the loop ([`RuntimeHandle::cancel`] or by dropping it).
+pub struct RuntimeRunner<C: Client> {
     sender: Sender<Operation<ClientMessage<C>>>,
     receiver: Receiver<Operation<ClientMessage<C>>>,
 }
-impl<C: Client> Default for RuntimeBuilder<C> {
-    /// Creates an instance
-    fn default() -> Self {
+
+impl<C: Client> RuntimeRunner<C> {
+    /// Prepares the `Runtime`, returning its single [`RuntimeHandle`] and the [`RuntimeRunner`]
+    /// that will build and finally run it .
+    pub fn create() -> (RuntimeHandle<C>, RuntimeRunner<C>) {
         let (sender, receiver) = mpsc::channel::<Operation<ClientMessage<C>>>();
-        RuntimeBuilder { sender, receiver }
-    }
-}
-
-impl<C: Client> RuntimeBuilder<C> {
-    /// Creates a MessageSender ready to start sending messages into the Runtime. Messages sent
-    /// before a Runtime is created are queued nd delivered as soon as it is created.
-    pub fn create_sender(&self) -> MessageSender<ClientMessage<C>> {
-        MessageSender::from_sender(self.sender.clone())
+        let handle = RuntimeHandle::from_sender(sender.clone());
+        (handle, RuntimeRunner { sender, receiver })
     }
 
-    /// Creates a Runtime based on the configuration passed.
-    pub fn create_runtime<JD: JobsDispatcher>(
+    /// Builds the `Runtime` from `config` and drives its loop, returning the final state once it
+    /// drains. `Runtime` is `!Send`, so this assembles and runs it on the current thread.
+    ///
+    /// Messages sent before [`Self::run`] are queued and delivered as soon as the loop starts.
+    ///
+    /// # Errors
+    /// Returns a [`RuntimeFatalError`] if the run loop hit an unrecoverable error.
+    pub fn run<JD: JobsDispatcher>(
         self,
         config: RuntimeConfig<C, JD>,
-    ) -> RuntimeInit<C, JD> {
-        let sender = self.create_sender();
-        let handle = RuntimeHandle::from_sender(self.sender);
-        let runtime = Runtime {
+    ) -> Result<C::State, RuntimeFatalError> {
+        self.into_runtime(config).run()
+    }
+
+    fn into_runtime<JD: JobsDispatcher>(self, config: RuntimeConfig<C, JD>) -> Runtime<C, JD> {
+        Runtime {
             services: config.services,
             state: config.state,
             middlewares: MiddlewareStore::new(config.middlewares, config.reducer),
             subscribers: vec![],
             messages_rx: self.receiver,
-            messages_tx: sender,
+            messages_tx: MessageSender::from_sender(self.sender),
             runtime_reducer: config.runtime_reducer,
             jobs_dispatcher: config.jobs_dispatcher,
-        };
-
-        RuntimeInit { runtime, handle }
+        }
     }
 }
 
@@ -465,7 +466,7 @@ impl<C: Client, JD: JobsDispatcher> Runtime<C, JD> {
 /// Unique handle to manage Runtime event loop cancellation and replicate Runtime message senders.
 ///
 /// Cancellation can be forced by dropping this handle or calling [`Self::cancel`]. Runtime will
-/// drain its messages queue and then stop processing, causing [`Runtime::run`] to return without
+/// drain its messages queue and then stop processing, causing [`RuntimeRunner::run`] to return without
 /// errors (if pending messages did not cause any unrecoverable error).
 pub struct RuntimeHandle<C: Client> {
     sender: Sender<Operation<ClientMessage<C>>>,
@@ -474,15 +475,15 @@ pub struct RuntimeHandle<C: Client> {
 impl<C: Client> RuntimeHandle<C>
 {
     /// Creates a [`MessageSender`] to address messages ([`Client::Action`] or
-    /// [`Client::RuntimeAction`]) to [`Runtime`].
+    /// [`Client::RuntimeAction`]) to `Runtime`.
     ///
     /// [`MessageSender`]s can be obtained by cloning other instances too.
     pub fn create_sender(&self) -> MessageSender<ClientMessage<C>> {
         MessageSender::new(self.sender.clone())
     }
 
-    /// Cancels [`Runtime`] event loop, causing it to drain its messages queue and return from
-    /// [`Runtime::run`]
+    /// Cancels `Runtime` event loop, causing it to drain its messages queue and return from
+    /// [`RuntimeRunner::run`]
     pub fn cancel(&self) -> Result<(), RuntimeError> {
         self.sender.send(Stop(None)).map_err(|_| RuntimeError::NoLongerRunning)
     }
@@ -797,7 +798,8 @@ mod tests {
     fn started_runtime(
         config: RuntimeConfig<TestClient, WitnessJobDispatcher>,
     ) -> (TestRuntime, RuntimeHandle<TestClient>) {
-        let RuntimeInit { runtime, handle } = RuntimeBuilder::default().create_runtime(config);
+        let (handle, runner) = RuntimeRunner::create();
+        let runtime = runner.into_runtime(config);
         (runtime, handle)
     }
 

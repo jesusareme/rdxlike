@@ -13,7 +13,7 @@ pub trait MessageSend: Clone + Send + 'static {
 
     /// # Errors
     /// Will return `RuntimeError` if the message destinatary is no longer available, which means
-    /// [`Runtime`] is no longer accepting messages, it's no longer running
+    /// `Runtime` is no longer accepting messages, it's no longer running
     fn send_message(
         &self,
         message: impl Into<Self::Message>,

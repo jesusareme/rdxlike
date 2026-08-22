@@ -29,7 +29,13 @@ struct ExpenseRow: View {
     var body: some View {
         switch item {
         case .expense(let plainListItem):
-            Text("\(plainListItem.id) - \(plainListItem.amount) on date \(plainListItem.date)")
+            VStack {
+                Text("\(plainListItem.comment ?? "<no comment>")")
+                Rectangle().fill(Color.blue).frame(height: 1).padding(.horizontal, 40)
+                Text(Double(plainListItem.amount) / 100.0, format: .currency(code: "EUR"))
+                Text(plainListItem.date, format: .dateTime)
+
+            }
         case .fault(let uUID):
             Text("Fault for \(uUID)")
         }
