@@ -22,15 +22,49 @@ public enum ExpensesLibRuntime {
     public func rootModel() -> ExpensesRootModel {
         ExpensesRootModel(lib: self.lib)
     }
+
+    public func save() {
+        do {
+            try lib.save()
+        } catch {
+            print("Error saving: \(error)")
+        }
+    }
 }
 
 extension MoniErrorType: @retroactive CustomStringConvertible {
     public var description: String {
         switch self {
-        case .lib(let message):
-            return "MoniLib error: \(message)"
-        case .domain(let message):
-            return "Domain error: \(message)"
+        case .lib(let cause):
+            return "MoniLib error: \(cause)"
+        case .domain(let error):
+            return "Domain error: \(error)"
+        }
+    }
+}
+
+extension LibErrorCause: @retroactive CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .sender:
+            return "internal communication failed"
+        case .path:
+            return "invalid storage path"
+        case .threading:
+            return "threading failure"
+        case .stateLoad(let message):
+            return "failed to load state: \(message)"
+        }
+    }
+}
+
+extension MoniDomainError: @retroactive CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .validation(let error):
+            return "\(error.field) is invalid (\(error.cause))"
+        case .expenseNotFound(let id):
+            return "expense not found: \(id)"
         }
     }
 }
@@ -76,6 +110,21 @@ extension MoniErrorType: @retroactive CustomStringConvertible {
     deinit {
         self.errorsTask?.cancel()
         self.statisticsTask?.cancel()
+    }
+}
+
+extension MoniExpense {
+    static func random(maxAmount: Int64) -> MoniExpense {
+        let comments = [
+            "Double Espresso", "Groceries", "Taxi", "Lunch", "J.S.O. DSP Book",
+            "Vinyl record", "Gym", "Orange juice", "Autechre latest WARP reedition", "Gift"
+        ]
+        return MoniExpense(
+            date: nil,
+            amount: Int64.random(in: 1_00...maxAmount),
+            comment: comments.randomElement(),
+            category: ExpenseCategory.allCases.randomElement() ?? .essential
+        )
     }
 }
 
@@ -125,8 +174,7 @@ public enum ExpenseListItem: Identifiable {
     
     public func add() {
         do {
-            let expense = MoniExpense(date: nil, amount: 4200, comment: "mola", category: .essential)
-            try lib.addExpense(expense: expense)
+            try lib.addExpense(expense: .random(maxAmount: MoniInfo.getMax()))
         } catch {
             print("Error adding expense: \(error)")
         }

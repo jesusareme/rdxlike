@@ -12,8 +12,8 @@ use crate::action::LibSubscription;
 pub use crate::error::{LibErrorCause, MoniDomainError, MoniError, MoniErrorType};
 use crate::inout::MoniStatistics;
 pub use crate::inout::{
-    LibOutput, MoniExpense, MoniExpensePlainListSnapshot, MoniExpenseUpdate, MoniValidationError,
-    MoniValidationErrorCause, PlainListItem,
+    LibOutput, MoniExpense, MoniExpensePlainListSnapshot, MoniExpenseUpdate, MoniInfo,
+    MoniValidationError, MoniValidationErrorCause, PlainListItem,
 };
 pub use crate::runtime::ExpenseCategory;
 use crate::runtime::{MoniLibClient, MoniMessage, RuntimeEnvironment};

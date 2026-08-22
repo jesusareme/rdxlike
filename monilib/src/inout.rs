@@ -2,7 +2,7 @@ use crate::inout::MoniValidationErrorCause::Range;
 use crate::runtime::Expense;
 use crate::util::{ClockSource, ExpenseId};
 use crate::{ExpenseCategory, LibErrorCause, MoniError, MoniErrorType};
-use boltffi::{EventSubscription, data, error};
+use boltffi::{data, error, export, EventSubscription};
 use jiff::Zoned;
 use rdxlib::subscribers::ViewOutput;
 use std::{
@@ -163,11 +163,8 @@ impl MoniExpense {
 }
 
 impl MoniExpense {
-    #[allow(clippy::inconsistent_digit_grouping)]
-    pub const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
-
     fn validated_amount(amount: i64) -> Result<i64, MoniValidationError> {
-        if (-Self::AMOUNT_LIMIT..=Self::AMOUNT_LIMIT).contains(&amount) {
+        if (-MoniInfo::AMOUNT_LIMIT..=MoniInfo::AMOUNT_LIMIT).contains(&amount) {
             Ok(amount)
         } else {
             Err(MoniValidationError {
@@ -175,6 +172,21 @@ impl MoniExpense {
                 field: "amount".to_string(),
             })
         }
+    }
+}
+
+pub struct MoniInfo {}
+
+impl MoniInfo {
+    #[allow(clippy::inconsistent_digit_grouping)]
+    pub const AMOUNT_LIMIT: i64 = 1_000_000_00; // 1M
+}
+
+#[export]
+impl MoniInfo {
+    #[must_use]
+    pub fn get_max() -> i64 {
+        Self::AMOUNT_LIMIT
     }
 }
 
@@ -379,10 +391,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::above_limit(MoniExpense::AMOUNT_LIMIT + 1, false)]
-    #[case::below_limit(-MoniExpense::AMOUNT_LIMIT - 1, false)]
-    #[case::at_upper_limit(MoniExpense::AMOUNT_LIMIT, true)]
-    #[case::at_lower_limit(-MoniExpense::AMOUNT_LIMIT, true)]
+    #[case::above_limit(MoniInfo::AMOUNT_LIMIT + 1, false)]
+    #[case::below_limit(-MoniInfo::AMOUNT_LIMIT - 1, false)]
+    #[case::at_upper_limit(MoniInfo::AMOUNT_LIMIT, true)]
+    #[case::at_lower_limit(-MoniInfo::AMOUNT_LIMIT, true)]
     #[case::within_limits(4200, true)]
     fn into_add_intent_should_validate_amount(#[case] amount: i64, #[case] valid: bool) {
         let m_expense = MoniExpense {
@@ -405,10 +417,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::above_limit(MoniExpense::AMOUNT_LIMIT + 1, false)]
-    #[case::below_limit(-MoniExpense::AMOUNT_LIMIT - 1, false)]
-    #[case::at_upper_limit(MoniExpense::AMOUNT_LIMIT, true)]
-    #[case::at_lower_limit(-MoniExpense::AMOUNT_LIMIT, true)]
+    #[case::above_limit(MoniInfo::AMOUNT_LIMIT + 1, false)]
+    #[case::below_limit(-MoniInfo::AMOUNT_LIMIT - 1, false)]
+    #[case::at_upper_limit(MoniInfo::AMOUNT_LIMIT, true)]
+    #[case::at_lower_limit(-MoniInfo::AMOUNT_LIMIT, true)]
     #[case::within_limits(4200, true)]
     fn into_updatable_expense_should_validate_amount(#[case] amount: i64, #[case] valid: bool) {
         let m_expense = MoniExpense {
