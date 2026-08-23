@@ -71,18 +71,26 @@ where
 pub struct DropCancellation(Arc<RwLock<bool>>, Uuid);
 
 impl DropCancellation {
+    #[must_use]
     pub fn new() -> Self {
         DropCancellation(Arc::new(RwLock::new(false)), Uuid::new_v4())
     }
 
     /// Creates a [`CancellationCheck`]. They can also be created by cloning any other existent
     /// instance.
+    #[must_use]
     pub fn cancellation_check(&self) -> CancellationCheck {
         CancellationCheck(self.0.clone(), self.1)
     }
 
     /// Notify [`CancellationCheck`]s the need to cancel the process they are embedded in.
     pub fn cancel(self) { }
+}
+
+impl Default for DropCancellation {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Drop for DropCancellation {
@@ -101,6 +109,7 @@ impl CancellationCheck {
 
     /// Returns the cancellation status. Current task is expected to end as soon as possible after
     /// this method returns `true`.
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         *self.0.read().unwrap_or_else(PoisonError::into_inner)
     }

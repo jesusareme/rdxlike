@@ -12,28 +12,28 @@
 //! [`Message`]s:
 //!
 //! - [`Message`]s are the incoming data and instructions basic unit, used for both,
-//! runtime-related messages and client-domain messages.
+//!   runtime-related messages and client-domain messages.
 //! - [`Message::Action`] represents client-domain messages and runs through the [`middleware`]
-//! chain to be processed into [`ActionProducts`]s.
+//!   chain to be processed into [`ActionProducts`]s.
 //! - [`Reducer`] is the main responsible for internal state mutation and returns [`ActionProducts`]:
-//! side effects to run ([`Cmd`]) plus dirty [`Client::Flag`]s describing which parts of the state changed.
-//! This is the last link executed in the [`ChainableMiddleware`]s chain.
+//!   side effects to run ([`Cmd`]) plus dirty [`Client::Flag`]s describing which parts of the state changed.
+//!   This is the last link executed in the [`ChainableMiddleware`]s chain.
 //! - [`ChainableMiddleware`] represents a `middleware` implementation, in some ways similar to
-//! a [`Reducer`], in that they can read or modify any behavior around [`Reducer`], such as observe
-//! or mutate state, actions or products, before or after [`Reducer`] execution.
-//! Their effects can be composed by chaining several `middlewares` together, hence the Trait's name.
+//!   a [`Reducer`], in that they can read or modify any behavior around [`Reducer`], such as observe
+//!   or mutate state, actions or products, before or after [`Reducer`] execution.
+//!   Their effects can be composed by chaining several `middlewares` together, hence the Trait's name.
 //! - [`Cmd`]s can be seen as operations that needs out of the runtime data or processing, generally executed
-//! as side effect of an [`Message::Action`], usually as an asynchronous and/or long-running operation (think:
-//! save a file, get some data from a remote API, start reading from a sensor according to a schedule, etc.)
+//!   as side effect of an [`Message::Action`], usually as an asynchronous and/or long-running operation (think:
+//!   save a file, get some data from a remote API, start reading from a sensor according to a schedule, etc.)
 //! - [`Message::Runtime`] represents runtime related requests to the `Runtime`. They run through
-//! the [`RuntimeReducer`] and return [`RuntimeProducts`]: usually a new [`Subscriber`] to register
-//! and/or follow-up actions.
+//!   the [`RuntimeReducer`] and return [`RuntimeProducts`]: usually a new [`Subscriber`] to register
+//!   and/or follow-up actions.
 //! - [`Subscriber`]s are the way out of the `Runtime`: they can produce derived artifacts,
-//! useful for the client, based on a read-only copy of the [`State`] (previously mutated
-//! by [`middleware`]s and [`Reducer`]). After a message and everything it cascaded into have
-//! been processed, subscribers interested in the accumulated dirty flags are notified once. A reference
-//! implementation of a [`Subscriber`] specifically addressed at generating client views is
-//! include as [`OutputSubscriber`]
+//!   useful for the client, based on a read-only copy of the [`State`] (previously mutated
+//!   by [`middleware`]s and [`Reducer`]). After a message and everything it cascaded into have
+//!   been processed, subscribers interested in the accumulated dirty flags are notified once. A reference
+//!   implementation of a [`Subscriber`] specifically addressed at generating client views is
+//!   include as [`OutputSubscriber`]
 //!
 //! ### Threading model
 //! Runtime should usually be run by the Client on its own thread to avoid any blocking effect on the calling Client, but
@@ -318,6 +318,7 @@ pub struct RuntimeRunner<C: Client> {
 impl<C: Client> RuntimeRunner<C> {
     /// Prepares the `Runtime`, returning its single [`RuntimeHandle`] and the [`RuntimeRunner`]
     /// that will build and finally run it .
+    #[must_use]
     pub fn create() -> (RuntimeHandle<C>, RuntimeRunner<C>) {
         let (sender, receiver) = mpsc::channel::<Operation<ClientMessage<C>>>();
         let handle = RuntimeHandle::from_sender(sender.clone());
@@ -478,12 +479,16 @@ impl<C: Client> RuntimeHandle<C>
     /// [`Client::RuntimeAction`]) to `Runtime`.
     ///
     /// [`MessageSender`]s can be obtained by cloning other instances too.
+    #[must_use]
     pub fn create_sender(&self) -> MessageSender<ClientMessage<C>> {
         MessageSender::new(self.sender.clone())
     }
 
     /// Cancels `Runtime` event loop, causing it to drain its messages queue and return from
     /// [`RuntimeRunner::run`]
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if target `Runtime` is no longer running.
     pub fn cancel(&self) -> Result<(), RuntimeError> {
         self.sender.send(Stop(None)).map_err(|_| RuntimeError::NoLongerRunning)
     }

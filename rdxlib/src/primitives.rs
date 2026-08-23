@@ -7,7 +7,7 @@
 //! Poisoning errors have been ignored through these constructs, as logic executed while
 //! holding a lock should never panic save for a std library bug. There are two exceptions to this,
 //! [`OneSlotReceiver::recv()`] and [`OneSlotReceiver::try_recv()`], which can panic if the contained
-//! value drop panics on `take()` call. We would lose latest value on that call but OneSlot
+//! value drop panics on `take()` call. We would lose latest value on that call but `OneSlot`
 //! invariants are not compromised.
 
 use crate::error::RuntimeError;

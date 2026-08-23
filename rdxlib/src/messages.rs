@@ -5,7 +5,7 @@ use crate::error::RuntimeError;
 /// A unit of work queued for the runtime.
 ///
 /// Implementing [`From<T>`] for each Message subtype is ergonomically recommended practice, and,
-/// in fact, both Client implementations [`crate::Client::Action`] and [crate::Client:RuntimeAction] need to implement
+/// in fact, both Client implementations [`crate::Client::Action`] and [`crate::Client:RuntimeAction`] need to implement
 /// `Into<ClientMessage<_>>`.
 #[derive(Debug, PartialEq)]
 pub enum Message<A, R> {

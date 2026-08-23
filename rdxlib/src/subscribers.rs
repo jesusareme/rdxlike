@@ -77,13 +77,13 @@ pub trait ViewTransformer<C: Client>: Send + 'static {
     /// As-cheap-as-possible internal state to be compared between notifications to identify relevant
     /// state changes. [`OutputSubscriber`] stores and compares the value on out behalf.
     ///
-    /// Example: To identify if we have a new email pending to be drawn, we may use as ComparableValue
+    /// Example: To identify if we have a new email pending to be drawn, we may use as `ComparableValue`
     /// the type used as email id (we would store the latest received email id there).
     type ComparableValue: PartialEq;
 
     /// The self-contained piece of state handed to the worker thread.
     ///
-    /// Example: to show a list of emails, Slice could be an array of not-yet-displayed emails models..
+    /// Example: to show a list of emails, Slice could be an array of not-yet-displayed emails models.
     type Slice: Send + 'static;
 
     /// The finished data the view consumes.
