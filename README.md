@@ -139,12 +139,16 @@ Rust skills and, above all, to find ways to apply them to audio application deve
 - Redux documentation.
 - Elm documentation.
 - TCA documentation.
-- You have to love [Juan Pedro Bolivar's C++ talks](https://youtu.be/_oBx_NbLghY?si=xwsBtiFaqU4rYWKD).
-- I intentionally tried to keep similar Rust projects out of sight as a way to force myself to find my own
-  solutions.
+- You have to love every [Juan Pedro Bolivar's C++ talks](https://youtu.be/_oBx_NbLghY?si=xwsBtiFaqU4rYWKD).
+- You may frown at my use of `&mut State`. It was my logical conclusion after first weeks using Rust, but [Niko Matsakis explains the underlying reason better than me.](https://smallcultfollowing.com/babysteps/blog/2018/02/01/in-rust-ordinary-vectors-are-values/)
+- I intentionally tried to keep similar Rust projects out of sight during development as a way to force myself to find my own solutions.
 
 ## Why moni-things everywhere?
 Read in Spanish, `moni` sounds roughly the same as `money`.
+
+## License
+MIT, see [LICENSE](LICENSE). Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this project is licensed under the same terms.
 
 [^1]: Unless you want to do your bit for the worldwide quality slippery slope we're suffering, in which case
 please continue using the one-solution-for-every-problem approach.
