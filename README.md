@@ -143,6 +143,15 @@ Rust skills and, above all, to find ways to apply them to audio application deve
 - You may frown at my use of `&mut State`. It was my logical conclusion after first weeks using Rust, but [Niko Matsakis explains the underlying reason better than me.](https://smallcultfollowing.com/babysteps/blog/2018/02/01/in-rust-ordinary-vectors-are-values/)
 - I intentionally tried to keep similar Rust projects out of sight during development as a way to force myself to find my own solutions.
 
+## Yeah, but, how do I run the iOS app?
+Once you install the [Rust toolchain](https://rust-lang.org/tools/install/) you'll have to install the BoltFFI command-line
+tool and create the Apple Swift package and framework that backs the app:
+```
+cargo install boltffi_cli
+boltffi pack all
+```
+Then, Xcode project should be able to read the generated SPM and run the app.
+
 ## Why moni-things everywhere?
 Read in Spanish, `moni` sounds roughly the same as `money`.
 
