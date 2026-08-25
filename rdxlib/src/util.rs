@@ -3,6 +3,7 @@
 use crate::error::RuntimeError;
 use crate::messages::Operation::Run;
 use crate::messages::Operation;
+use std::fmt::{Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, PoisonError, RwLock};
 use uuid::Uuid;
@@ -61,6 +62,22 @@ where
     }
 }
 
+/// Identity of a (generally) cancellable task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TaskId(Uuid);
+
+impl From<Uuid> for TaskId {
+    fn from(value: Uuid) -> Self {
+        TaskId(value)
+    }
+}
+
+impl Display for TaskId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("TaskId").field(&self.0).finish()
+    }
+}
+
 /// Small utility to handle cooperative cancellation of asynchronous tasks.
 ///
 /// This unique handle can notice several instance of the derived construct [`CancellationCheck`]
@@ -68,12 +85,18 @@ where
 /// just dropping the instance.
 #[allow(unused)]
 #[derive(Debug)]
-pub struct DropCancellation(Arc<RwLock<bool>>, Uuid);
+pub struct DropCancellation(Arc<RwLock<bool>>, TaskId);
 
 impl DropCancellation {
     #[must_use]
     pub fn new() -> Self {
-        DropCancellation(Arc::new(RwLock::new(false)), Uuid::new_v4())
+        DropCancellation(Arc::new(RwLock::new(false)), Uuid::new_v4().into())
+    }
+
+    /// Identity of this cancellation scope, shared with every derived [`CancellationCheck`].
+    #[must_use]
+    pub fn id(&self) -> TaskId {
+        self.1
     }
 
     /// Creates a [`CancellationCheck`]. They can also be created by cloning any other existent
@@ -104,8 +127,14 @@ impl Drop for DropCancellation {
 /// order by the parent [`DropCancellation`].
 #[allow(unused)]
 #[derive(Debug)]
-pub struct CancellationCheck(Arc<RwLock<bool>>, Uuid);
+pub struct CancellationCheck(Arc<RwLock<bool>>, TaskId);
 impl CancellationCheck {
+
+    /// Identity of the cancellation scope this check was derived from.
+    #[must_use]
+    pub fn id(&self) -> TaskId {
+        self.1
+    }
 
     /// Returns the cancellation status. Current task is expected to end as soon as possible after
     /// this method returns `true`.

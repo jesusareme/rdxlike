@@ -3,7 +3,7 @@ use crate::action::WorkingAction;
 use crate::runtime::MoniMessage;
 use crate::runtime::cmd::{DebounceAction, DebounceCmd, TimeSubscriptionCmd};
 use crate::util::ClockSource;
-use rdxlib::util::MessageSend;
+use rdxlib::util::{MessageSend, TaskId};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU64;
@@ -12,7 +12,6 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::debug;
-use uuid::Uuid;
 
 pub(crate) struct Timers {
     tx: Sender<TimersMessage>,
@@ -216,7 +215,7 @@ impl Timers {
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone)]
 pub enum TimerId {
     DebounceSave,
-    RepeatedAction(Uuid),
+    RepeatedAction(TaskId),
 }
 
 impl From<TimeSubscriptionCmd> for TimersMessage {
@@ -256,7 +255,7 @@ impl From<DebounceCmd> for TimersMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{StuckInstantClock, alternative_ref_uuid, ref_uuid};
+    use crate::testing::{StuckInstantClock, alternative_ref_task_id, ref_task_id};
     use rstest::{fixture, rstest};
 
     impl Default for TimerBehavior {
@@ -285,7 +284,7 @@ mod tests {
 
     fn repeat_task() -> TimerTask {
         TimerTask {
-            id: TimerId::RepeatedAction(ref_uuid()),
+            id: TimerId::RepeatedAction(ref_task_id()),
             outcome: Box::new(|_| WorkingAction::Save),
             timer_type: TimerType::Repeat(Some(NonZeroU64::new(2).unwrap())),
             get_duration: Box::new(|_| Duration::from_nanos(1)),
@@ -311,7 +310,7 @@ mod tests {
 
     #[fixture]
     fn repeated_task_id() -> TimerId {
-        TimerId::RepeatedAction(ref_uuid())
+        TimerId::RepeatedAction(ref_task_id())
     }
 
     #[rstest]
@@ -701,7 +700,7 @@ mod tests {
         let actions = Timers::advance(
             &mut tasks,
             Some(TimersMessage::Cancel(TimerId::RepeatedAction(
-                alternative_ref_uuid(),
+                alternative_ref_task_id(),
             ))),
             clock.now_instant(),
         );
@@ -716,7 +715,7 @@ mod tests {
     #[rstest]
     fn every_x_interval_cmd_should_convert_into_bump_of_repeated_task() {
         let message = TimersMessage::from(TimeSubscriptionCmd::EveryXInterval(
-            ref_uuid(),
+            ref_task_id(),
             Duration::from_secs(30),
             WorkingAction::Save,
         ));
@@ -725,7 +724,7 @@ mod tests {
             panic!("EveryXInterval should convert into a Bump");
         };
 
-        assert_eq!(task.id, TimerId::RepeatedAction(ref_uuid()));
+        assert_eq!(task.id, TimerId::RepeatedAction(ref_task_id()));
         assert_eq!(task.timer_type, TimerType::Repeat(None));
         assert_eq!((task.get_duration)(0), Duration::from_secs(30));
         assert_eq!((task.get_duration)(41), Duration::from_secs(30));
@@ -734,7 +733,7 @@ mod tests {
     #[rstest]
     fn every_x_interval_cmd_should_yield_same_action_on_every_repetition() {
         let message = TimersMessage::from(TimeSubscriptionCmd::EveryXInterval(
-            ref_uuid(),
+            ref_task_id(),
             Duration::from_secs(30),
             WorkingAction::SuccessfulSave,
         ));
@@ -750,13 +749,13 @@ mod tests {
 
     #[rstest]
     fn cancel_every_x_interval_cmd_should_convert_into_cancel_of_repeated_task() {
-        let message = TimersMessage::from(TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid()));
+        let message = TimersMessage::from(TimeSubscriptionCmd::CancelEveryXInterval(ref_task_id()));
 
         let TimersMessage::Cancel(id) = message else {
             panic!("CancelEveryXInterval should convert into a Cancel");
         };
 
-        assert_eq!(id, TimerId::RepeatedAction(ref_uuid()));
+        assert_eq!(id, TimerId::RepeatedAction(ref_task_id()));
     }
 
     #[rstest]
@@ -792,7 +791,7 @@ mod tests {
             &mut tasks,
             Some(
                 TimeSubscriptionCmd::EveryXInterval(
-                    ref_uuid(),
+                    ref_task_id(),
                     Duration::from_secs(30),
                     WorkingAction::Save,
                 )
@@ -800,11 +799,11 @@ mod tests {
             ),
             clock.now_instant(),
         );
-        assert!(tasks.contains_key(&TimerId::RepeatedAction(ref_uuid())));
+        assert!(tasks.contains_key(&TimerId::RepeatedAction(ref_task_id())));
 
         Timers::advance(
             &mut tasks,
-            Some(TimeSubscriptionCmd::CancelEveryXInterval(ref_uuid()).into()),
+            Some(TimeSubscriptionCmd::CancelEveryXInterval(ref_task_id()).into()),
             clock.now_instant(),
         );
         assert!(tasks.is_empty());

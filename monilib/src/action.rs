@@ -8,8 +8,8 @@ use crate::{
 };
 use rdxlib::messages::Message;
 use rdxlib::subscribers::ViewId;
+use rdxlib::util::TaskId;
 use std::time::Duration;
-use uuid::Uuid;
 
 pub(crate) enum LibAction {
     Subscription(LibSubscription),
@@ -56,12 +56,12 @@ pub(crate) enum ModelAction {
     Update(Expense),
     Delete(ExpenseId),
     StatisticsAll,
-    StatisticsAllResult(Option<Statistics>),
+    StatisticsAllResult(TaskId, Option<Statistics>),
     CancelStatistics,
 
     // Action to set a recurrent timer as example of cancellable state
-    AddEveryXInterval(Uuid, Duration, Box<WorkingAction>),
-    StopAddingEveryXInterval(Uuid),
+    AddEveryXInterval(TaskId, Duration, Box<WorkingAction>),
+    StopAddingEveryXInterval(TaskId),
 }
 
 impl From<WorkingAction> for Action {

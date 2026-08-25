@@ -2,6 +2,7 @@ use crate::runtime::Expense;
 use crate::util::{ClockSource, ExpenseId};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
+use rdxlib::util::TaskId;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -17,6 +18,14 @@ pub fn ref_uuid() -> Uuid {
 pub fn alternative_ref_uuid() -> Uuid {
     Uuid::parse_str("f1f2f3f4e1e2d1d2c1c2b1b2b3b4b5b6")
         .expect("Example Uuid parsing should not fail")
+}
+
+pub fn ref_task_id() -> TaskId {
+    ref_uuid().into()
+}
+
+pub fn alternative_ref_task_id() -> TaskId {
+    alternative_ref_uuid().into()
 }
 
 pub fn contemporary_ref_date() -> Zoned {

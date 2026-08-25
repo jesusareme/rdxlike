@@ -9,10 +9,9 @@ use crate::runtime::{MoniCommand, MoniLibClient, MoniMessage};
 use crate::util::VersionedArc;
 use jiff::Timestamp;
 use rdxlib::cmd::{AsyncTask, Cmd, EnvironmentCommand};
-use rdxlib::util::{CancellationCheck, MessageSender};
+use rdxlib::util::{CancellationCheck, MessageSender, TaskId};
 use std::panic::UnwindSafe;
 use std::time::Duration;
-use uuid::Uuid;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ServiceCommand {
@@ -100,12 +99,10 @@ impl AsyncCmd {
                 }
 
                 Box::new(move || {
-                    StatisticsAllResult(calculate_statistics(
-                        expenses,
-                        request_time,
-                        &cancellation_check,
-                    ))
-                    .into()
+                    let id = cancellation_check.id();
+                    let statistics =
+                        calculate_statistics(expenses, request_time, &cancellation_check);
+                    StatisticsAllResult(id, statistics).into()
                 })
             }
         }
@@ -120,8 +117,8 @@ pub(crate) enum Subscription {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum TimeSubscriptionCmd {
-    EveryXInterval(Uuid, Duration, WorkingAction),
-    CancelEveryXInterval(Uuid),
+    EveryXInterval(TaskId, Duration, WorkingAction),
+    CancelEveryXInterval(TaskId),
 }
 
 #[derive(Debug, PartialEq)]

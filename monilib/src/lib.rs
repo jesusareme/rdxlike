@@ -221,7 +221,7 @@ impl MoniLib {
         let uuid = Uuid::new_v4();
         self.action_sender
             .send_message(ModelAction::AddEveryXInterval(
-                uuid,
+                uuid.into(),
                 interval,
                 Box::new(WorkingAction::Model(ModelAction::Add(
                     expense.into_add_intent(self.clock.as_ref())?,
@@ -232,7 +232,7 @@ impl MoniLib {
 
     pub fn cancel_repeat_expense(&self, id: Uuid) -> Result<(), MoniError> {
         self.action_sender
-            .send_message(ModelAction::StopAddingEveryXInterval(id))?;
+            .send_message(ModelAction::StopAddingEveryXInterval(id.into()))?;
         Ok(())
     }
 

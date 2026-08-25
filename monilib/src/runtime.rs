@@ -34,7 +34,7 @@ use rdxlib::messages::Message;
 use rdxlib::primitives::ThreadPool;
 use rdxlib::products::{ActionProducts, RuntimeProducts};
 use rdxlib::subscribers::ViewId;
-use rdxlib::util::{DropCancellation, MessageSend};
+use rdxlib::util::{DropCancellation, MessageSend, TaskId};
 use rdxlib::{Client, RuntimeConfig, RuntimeHandle, RuntimeRunner};
 
 use crate::action::Action::Init;
@@ -46,7 +46,6 @@ use boltffi::data;
 use rdxlib::middleware::ChainableMiddleware;
 #[cfg(test)]
 use std::cmp::Ordering;
-use uuid::Uuid;
 
 pub(crate) enum MoniLibClient {}
 impl Client for MoniLibClient {
@@ -318,8 +317,8 @@ struct RunningState {
 
 #[derive(Debug, Default)]
 struct LongLivingTasks {
-    recurrent_add: HashSet<Uuid>,
-    statistics_running: Option<DropCancellation>,
+    recurrent_add: HashSet<TaskId>,
+    statistics_calc_running: Option<DropCancellation>,
 }
 
 impl MoniMiddleware {
