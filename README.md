@@ -7,7 +7,7 @@ It started as a learning project: a way to practice Rust on familiar conceptual 
 practical it is today to keep an app's logic in a shared Rust library while leaving the UI to each platform's
 native framework.
 
-## Who are you and why did you do this?
+## Who are you and where do you come from?
 For the last couple of years I've been using (mostly) Max/MSP and gen~ to prototype audio effects and instruments
 that I later use as part of Ableton Live sessions. But my discomfort with established DAWs has only increased as
 time passes, so I decided to do something about it and start solidifying some of my ideas in a way other people
