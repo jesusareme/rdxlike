@@ -67,6 +67,8 @@ impl<T> VersionedArc<T>
 where
     T: Clone,
 {
+    /// Updates the content via `update` closure, cloning the content if there is any other reference
+    /// to it, or mutates it in place if there isn't (avoiding a clone operation then).
     pub fn update_with<R>(&mut self, update: impl FnOnce(&mut T) -> R) -> R {
         self.version = self.version.wrapping_add(1);
         update(Arc::make_mut(&mut self.content))
